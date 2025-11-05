@@ -1,21 +1,19 @@
 import cron from 'node-cron';
 import { config } from './config.js';
 import { log } from './utils/logger.js';
-import { syncGames, getUpcomingGroups } from './services/gameService.js';
-import { postGroupPoll } from './services/pollService.js';
-import { Bot } from 'grammy';
+import { syncGames, getFilteredUpcoming } from './services/gameService.js';
+import type { Bot } from 'grammy';
 
 export function setupScheduler(bot: Bot) {
     const task = cron.schedule(config.cron, async () => {
         try {
-            log.info('Cron: sync + post polls per group');
+            log.info('Cron tick: syncing & maybe posting poll');
             await syncGames();
-            const groups = await getUpcomingGroups();
-            for (const g of groups) {
-                if (g.items.length >= 2) {
-                    await postGroupPoll(bot, g);
-                }
-            }
+
+            // при необходимости можно что-то делать с апдейтом,
+            // ниже оставляю только вызов, чтобы не тянуть неиспользуемые импорты
+            const games = await getFilteredUpcoming();
+            log.info(`Upcoming for ${config.filters.daysAhead}d:`, games.length);
         } catch (e) {
             log.error('Cron job failed:', e);
         }

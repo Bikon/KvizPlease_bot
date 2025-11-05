@@ -1,20 +1,22 @@
 import dayjs from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat.js';
+import utc from 'dayjs/plugin/utc.js';
+import timezone from 'dayjs/plugin/timezone.js';
 import 'dayjs/locale/ru.js';
-import { RawGame, Game } from '../types.js';
 
-dayjs.extend(customParseFormat);
+import type { RawGame, Game } from '../types.js';
+
+dayjs.extend(customParseFormat as any);
+dayjs.extend(utc as any);
+dayjs.extend(timezone as any);
 dayjs.locale('ru');
 
-// нормализация имени для ключа группы
-function normalizeName(name: string): string {
-    return name.replace(/\s+/g, ' ').replace(/!+$/,'').trim();
-}
+const MOSCOW_TZ = 'Europe/Moscow';
 
+// Пытаемся распарсить «14 ноября, чт • 19:30» и т.п.
 export function normalize(raw: RawGame): Game | null {
-    const { date, time, gameType, gameNumber, ...rest } = raw;
-    const timeClean = time ? time.replace(/^в\s*/i, '') : '';
-    const combined = `${date} ${timeClean}`.trim();
+    const { date, time, ...rest } = raw;
+    const combined = `${date} ${time ?? ''}`.trim();
 
     const formats = [
         'D MMMM HH:mm',
@@ -22,19 +24,17 @@ export function normalize(raw: RawGame): Game | null {
         'DD.MM.YYYY HH:mm',
         'DD.MM HH:mm',
         'YYYY-MM-DD HH:mm',
-        'D MMM HH:mm'
+        'D MMM HH:mm',
     ];
 
     let dt: dayjs.Dayjs | null = null;
     for (const f of formats) {
-        const cand = dayjs(combined, f, 'ru', true);
+        // В dayjs.tz максимум 3 аргумента: (dateString, format?, timezone?)
+        const cand = dayjs.tz(combined, f, MOSCOW_TZ);
         if (cand.isValid()) { dt = cand; break; }
     }
-    if (!dt || !gameType || !gameNumber) return null;
 
-    const name = normalizeName(gameType);
-    const number = String(gameNumber);
-    const groupKey = `${name}#${number}`;
+    if (!dt) return null;
 
     return {
         externalId: rest.externalId,
@@ -47,8 +47,5 @@ export function normalize(raw: RawGame): Game | null {
         difficulty: rest.difficulty,
         status: rest.status,
         url: rest.url,
-        groupKey,
-        name,
-        number
     };
 }

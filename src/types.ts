@@ -1,10 +1,10 @@
 export type RawGame = {
     externalId: string;
-    title: string;           // исходный заголовок: "Квиз, плиз! #1212" или "[music party] рашн эдишн #7"
-    gameType?: string;       // часть до # (как есть)
-    gameNumber?: string;     // "1212"
-    date: string;            // "4 ноября" и т.п.
-    time?: string;           // "в 16:00"
+    title: string;           // строка вида "Квиз, плиз! #1212" или "[music party] рашн эдишн #7"
+    gameType?: string;       // "[music party] рашн эдишн" или "Квиз, плиз"
+    gameNumber?: string;     // "7" или "1212"
+    date: string;
+    time?: string;
     venue?: string;
     district?: string;
     address?: string;
@@ -25,14 +25,16 @@ export type Game = {
     difficulty?: string;
     status?: string;
     url: string;
-    groupKey: string; // "<name>#<number>" нормализованный
-    name: string;     // нормализованное имя (для группировки)
-    number: string;   // номер выпуска
+    groupKey?: string; // "[тип]#номер" или "Квиз, плиз#1212"
+    played?: boolean;
+    excluded?: boolean;
 };
 
-export type Group = {
-    groupKey: string;
-    name: string;
-    number: string;
-    items: Game[];
+export type GameGroup = {
+    groupKey: string;   // "[тип]#номер"
+    name: string;       // "[тип]" или "Квиз, плиз"
+    number: string;     // "7" / "1212"
+    items: Game[];      // все даты (>=1)
+    played?: boolean;   // если все помечены как played или есть запись о played по группе
+    excluded?: boolean; // если группа исключена (таблица excluded_groups или все items.excluded)
 };
