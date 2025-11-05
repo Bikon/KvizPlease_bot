@@ -1,5 +1,5 @@
 import { pool } from './pool.js';
-import { Game } from '../types.js';
+import { Game, Group } from '../types.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -8,55 +8,90 @@ let UPSERT_SQL = '';
 (async () => { UPSERT_SQL = await fs.readFile(upsertSqlPath, 'utf8'); })();
 
 export async function upsertGame(game: Game) {
-  const {
-    externalId, title, dateTime, venue, district, address, price, difficulty, status, url, groupKey
-  } = game;
-  await pool.query(UPSERT_SQL, [
-    externalId, title, dateTime, venue ?? null, district ?? null, address ?? null,
-    price ?? null, difficulty ?? null, status ?? null, url, groupKey ?? null
-  ]);
+    const {
+        externalId, title, dateTime, venue, district, address,
+        price, difficulty, status, url, groupKey
+    } = game;
+
+    await pool.query(UPSERT_SQL, [
+        externalId, title, dateTime, venue ?? null, district ?? null, address ?? null,
+        price ?? null, difficulty ?? null, status ?? null, url, groupKey
+    ]);
 }
 
 export async function findUpcomingGames(daysAhead: number, allowedDistricts: string[]) {
-  const res = await pool.query(
-    `SELECT * FROM games
+    const res = await pool.query(
+        `SELECT * FROM games
      WHERE date_time >= now()
        AND date_time <= now() + ($1::text || ' days')::interval
        AND ($2::text[] IS NULL OR district = ANY($2))
      ORDER BY group_key, date_time ASC`,
-    [String(daysAhead), allowedDistricts.length ? allowedDistricts : null]
-  );
-  return res.rows as any[];
+        [String(daysAhead), allowedDistricts.length ? allowedDistricts : null]
+    );
+    return res.rows as any[];
 }
 
 export async function isGroupProcessed(groupKey: string) {
-  const r = await pool.query('SELECT 1 FROM processed_groups WHERE group_key=$1', [groupKey]);
-  return r.rowCount > 0;
+    const r = await pool.query('SELECT 1 FROM processed_groups WHERE group_key=$1', [groupKey]);
+    return (r.rowCount ?? 0) > 0;
 }
 
 export async function markGroupProcessed(groupKey: string) {
-  await pool.query('INSERT INTO processed_groups(group_key) VALUES($1) ON CONFLICT DO NOTHING', [groupKey]);
+    await pool.query(
+        'INSERT INTO processed_groups(group_key) VALUES($1) ON CONFLICT DO NOTHING',
+        [groupKey]
+    );
 }
 
 export async function insertPoll(pollId: string, chatId: string, messageId: number, groupKey?: string) {
-  await pool.query(
-    'INSERT INTO polls (poll_id, chat_id, message_id, group_key) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING',
-    [pollId, chatId, messageId, groupKey ?? null]
-  );
+    await pool.query(
+        'INSERT INTO polls (poll_id, chat_id, message_id, group_key) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING',
+        [pollId, chatId, messageId, groupKey ?? null]
+    );
 }
 
 export async function mapPollOption(pollId: string, optionId: number, gameExternalId: string | null, isUnavailable = false) {
-  await pool.query(
-    'INSERT INTO poll_options (poll_id, option_id, game_external_id, is_unavailable) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING',
-    [pollId, optionId, gameExternalId, isUnavailable]
-  );
+    await pool.query(
+        'INSERT INTO poll_options (poll_id, option_id, game_external_id, is_unavailable) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING',
+        [pollId, optionId, gameExternalId, isUnavailable]
+    );
 }
 
 export async function upsertVote(pollId: string, userId: number, optionIds: number[]) {
-  await pool.query(
-    `INSERT INTO poll_votes (poll_id, user_id, option_ids)
+    await pool.query(
+        `INSERT INTO poll_votes (poll_id, user_id, option_ids)
      VALUES ($1,$2,$3)
-     ON CONFLICT(poll_id, user_id) DO UPDATE SET option_ids = EXCLUDED.option_ids, voted_at = now()`,
-    [pollId, userId, optionIds]
-  );
+     ON CONFLICT(poll_id, user_id)
+     DO UPDATE SET option_ids = EXCLUDED.option_ids, voted_at = now()`,
+        [pollId, userId, optionIds]
+    );
+}
+
+/** Вернёт сгруппированные выпуски, где дат >= 2 и выпуск не помечен как обработанный */
+export async function findUpcomingGroups(daysAhead: number, allowedDistricts: string[]): Promise<Group[]> {
+    const games = await findUpcomingGames(daysAhead, allowedDistricts);
+    const byGroup = new Map<string, Group>();
+
+    for (const g of games) {
+        if (!g.group_key) continue;
+        const [name, number] = g.group_key.split('#');
+        if (!byGroup.has(g.group_key)) {
+            byGroup.set(g.group_key, {
+                groupKey: g.group_key,
+                name,
+                number,
+                items: [],
+            });
+        }
+        byGroup.get(g.group_key)!.items.push(g as any);
+    }
+
+    // Фильтруем выпуски по условию ≥2 дат и не обработанные ранее
+    const res: Group[] = [];
+    for (const grp of byGroup.values()) {
+        if (grp.items.length < 2) continue;
+        const processed = await isGroupProcessed(grp.groupKey);
+        if (!processed) res.push(grp);
+    }
+    return res;
 }

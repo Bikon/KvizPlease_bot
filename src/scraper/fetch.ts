@@ -1,50 +1,46 @@
 import puppeteer from 'puppeteer';
 import { log } from '../utils/logger.js';
 
-// Кликаем чекбоксы по name=value, если они присутствуют на странице
-async function setCheckbox(page: puppeteer.Page, name: string, value: string) {
-  const handle = await page.$(`input[type="checkbox"][name="${name}"][value="${value}"]`);
-  if (handle) {
-    const checked = await page.evaluate((el: HTMLInputElement) => el.checked, handle);
-    if (!checked) {
-      await handle.click();
-      await page.waitForTimeout(150);
-    }
-  }
-}
+const sleep = (ms: number) => new Promise(res => setTimeout(res, ms));
 
 export async function grabPageHtmlWithFilters(url: string) {
-  const browser = await puppeteer.launch({ headless: 'new', args: ['--no-sandbox','--disable-setuid-sandbox'] });
-  const page = await browser.newPage();
-  await page.setViewport({ width: 1280, height: 1400 });
+    const browser = await puppeteer.launch({
+        headless: true,
+        args: ['--no-sandbox','--disable-setuid-sandbox']
+    });
+    const page = await browser.newPage();
+    await page.setViewport({ width: 1280, height: 1600 });
 
-  await page.goto(url, { waitUntil: 'networkidle2' });
+    await page.goto(url, { waitUntil: 'networkidle2' });
 
-  // Формат: офлайн
-  await setCheckbox(page, 'QpGameSearch[format][]', '0');
-  // Типы: классика, кино-муз, тематические, тематические кино-муз
-  for (const v of ['1','5','2','9']) {
-    await setCheckbox(page, 'QpGameSearch[type][]', v);
-  }
-  // Статус: есть места
-  await setCheckbox(page, 'QpGameSearch[status][]', '1');
+    // Жмём "Загрузить ещё" пока появляются новые карточки
+    while (true) {
+        const btn = await page.$('.load-more-button');
+        if (!btn) break;
 
-  // "Загрузить ещё"
-  while (true) {
-    const moreDiv = await page.$('.load-more-button');
-    if (!moreDiv) break;
-    const isVisible = await page.evaluate(el => {
-      const s = window.getComputedStyle(el as any);
-      return s && s.display !== 'none' && s.visibility !== 'hidden';
-    }, moreDiv);
-    if (!isVisible) break;
-    await moreDiv.click();
-    await page.waitForNetworkIdle({ idleTime: 800, timeout: 15000 }).catch(() => {});
-    await page.waitForTimeout(500);
-  }
+        const before = await page.$$eval('.schedule-column', els => els.length);
 
-  const html = await page.content();
-  await browser.close();
-  log.info('HTML grabbed with filters & full list loaded');
-  return html;
+        await btn.click().catch(() => {});
+        // ждём прироста количества карточек
+        await page
+            .waitForFunction(
+                (sel, n) => document.querySelectorAll(sel).length > n,
+                { timeout: 15000 },
+                '.schedule-column',
+                before
+            )
+            .catch(() => null);
+
+        const after = await page.$$eval('.schedule-column', els => els.length);
+        if (after <= before) {
+            await sleep(600);
+            const after2 = await page.$$eval('.schedule-column', els => els.length);
+            if (after2 <= before) break;
+        }
+    }
+
+    const html = await page.content();
+    await browser.close();
+    log.info('HTML grabbed (prefiltered URL) & full list loaded');
+    return html;
 }
