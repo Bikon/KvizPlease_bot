@@ -1,9 +1,10 @@
 import { grabPageHtmlWithFilters } from '../scraper/fetch.js';
 import { parseQuizPlease } from '../scraper/parse.js';
 import { normalize } from '../scraper/normalize.js';
-import { upsertGame, findUpcomingGames, findUpcomingGroups, listExcludedTypes } from '../db/repositories.js';
+import { upsertGame, findUpcomingGames, findUpcomingGroups } from '../db/repositories.js';
 import { config } from '../config.js';
 import { log } from '../utils/logger.js';
+import { syncQueue } from '../utils/syncQueue.js';
 
 function extractGroupKey(title: string) {
     // На входе title вроде: "[music party] рашн эдишн #7" или "Квиз, плиз! #1212"
@@ -16,39 +17,40 @@ function extractGroupKey(title: string) {
     return { groupKey: `${typeName}#${num}`, typeName, number: num };
 }
 
-export async function syncGames() {
-    const html = await grabPageHtmlWithFilters(config.sourceUrl);
-    log.info('HTML grabbed (prefiltered URL) & full list loaded');
+async function syncGamesInternal(chatId: string, sourceUrl: string): Promise<{ added: number; skipped: number }> {
+    const html = await grabPageHtmlWithFilters(sourceUrl);
+    log.info(`[Chat ${chatId}] HTML grabbed & full list loaded`);
 
-    const raw = parseQuizPlease(html, config.sourceUrl);
-    const excludedTypes = new Set((await listExcludedTypes()).map(t => t.toLowerCase()));
+    const raw = parseQuizPlease(html, sourceUrl);
 
     let ok = 0, skip = 0;
     for (const r of raw) {
-        // отфильтруем типы ещё на этапе синка
-        const name = r.gameType ?? r.title.split('#')[0].trim();
-        const normalizedType = name.replace(/!+$/,'').trim().toLowerCase();
-        if (excludedTypes.has(normalizedType)) {
-            skip++;
-            continue;
-        }
-
         const g = normalize(r);
         if (!g) { skip++; continue; }
 
         const { groupKey } = extractGroupKey(r.title);
         g.groupKey = groupKey;
 
-        await upsertGame(g);
+        await upsertGame(g, chatId, sourceUrl);
         ok++;
     }
-    log.info(`Synced games: ${ok}, skipped: ${skip}`);
+    log.info(`[Chat ${chatId}] Synced games: ${ok}, skipped: ${skip}`);
+    return { added: ok, skipped: skip };
 }
 
-export async function getFilteredUpcoming() {
-    return await findUpcomingGames(config.filters.daysAhead, config.filters.districts);
+// Initialize queue with the sync function
+syncQueue.setSyncFunction(syncGamesInternal);
+
+export async function syncGames(chatId: string, sourceUrl: string): Promise<{ added: number; skipped: number }> {
+    const status = syncQueue.getStatus();
+    log.info(`[Chat ${chatId}] Sync requested. Queue status: ${status.running}/${status.maxConcurrency} running, ${status.queued} queued`);
+    return await syncQueue.enqueue(chatId, sourceUrl);
 }
 
-export async function getUpcomingGroups() {
-    return await findUpcomingGroups(config.filters.daysAhead, config.filters.districts);
+export async function getFilteredUpcoming(chatId: string) {
+    return await findUpcomingGames(config.filters.daysAhead, config.filters.districts, chatId);
+}
+
+export async function getUpcomingGroups(chatId: string) {
+    return await findUpcomingGroups(config.filters.daysAhead, config.filters.districts, chatId);
 }

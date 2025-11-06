@@ -11,7 +11,7 @@ export function buildPollTitle(groupName: string, number: string) {
     return `Квиз Плиз. ${groupName} #${number}`;
 }
 
-export async function postGroupPoll(bot: Bot, group: { groupKey: string; name: string; number: string; items: any[] }) {
+export async function postGroupPoll(bot: Bot, chatId: string | number, group: { groupKey: string; name: string; number: string; items: any[] }) {
     if (!group.items.length) return null;
 
     const options = group.items.map((g) => {
@@ -28,7 +28,7 @@ export async function postGroupPoll(bot: Bot, group: { groupKey: string; name: s
 
     const title = buildPollTitle(group.name, group.number);
 
-    const msg = await bot.api.sendPoll(config.chatId, title, options, {
+    const msg = await bot.api.sendPoll(chatId, title, options, {
         is_anonymous: false,
         allows_multiple_answers: true,
     });

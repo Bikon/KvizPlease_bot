@@ -1,6 +1,7 @@
 CREATE TABLE IF NOT EXISTS games (
     id BIGSERIAL PRIMARY KEY,
-    external_id TEXT UNIQUE NOT NULL,
+    chat_id TEXT NOT NULL,
+    external_id TEXT NOT NULL,
     title TEXT NOT NULL,
     date_time TIMESTAMP WITH TIME ZONE NOT NULL,
     venue TEXT,
@@ -11,10 +12,12 @@ CREATE TABLE IF NOT EXISTS games (
     status TEXT,
     url TEXT NOT NULL,
     group_key TEXT,
+    source_url TEXT,
     created_at TIMESTAMPTZ DEFAULT now(),
     updated_at TIMESTAMPTZ DEFAULT now(),
     played BOOLEAN DEFAULT false,
-    excluded BOOLEAN DEFAULT false
+    excluded BOOLEAN DEFAULT false,
+    UNIQUE(chat_id, external_id)
     );
 
 CREATE TABLE IF NOT EXISTS processed_groups (
@@ -58,6 +61,34 @@ CREATE TABLE IF NOT EXISTS excluded_types (
   excluded_at TIMESTAMPTZ DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS idx_games_datetime ON games(date_time);
-CREATE INDEX IF NOT EXISTS idx_games_group    ON games(group_key);
-CREATE INDEX IF NOT EXISTS idx_games_flags    ON games(played, excluded);
+CREATE INDEX IF NOT EXISTS idx_games_chat_datetime ON games(chat_id, date_time);
+CREATE INDEX IF NOT EXISTS idx_games_chat_group ON games(chat_id, group_key);
+CREATE INDEX IF NOT EXISTS idx_games_flags ON games(played, excluded);
+
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS chat_settings (
+    chat_id TEXT NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY(chat_id, key)
+);
+
+CREATE TABLE IF NOT EXISTS chat_played_groups (
+    chat_id TEXT NOT NULL,
+    group_key TEXT NOT NULL,
+    played_at TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY(chat_id, group_key)
+);
+
+CREATE TABLE IF NOT EXISTS chat_excluded_types (
+    chat_id TEXT NOT NULL,
+    type_name TEXT NOT NULL,
+    excluded_at TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY(chat_id, type_name)
+);

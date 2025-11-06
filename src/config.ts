@@ -5,7 +5,7 @@ export const config = {
     chatId: process.env.TELEGRAM_CHAT_ID!,
     cron: process.env.SCHEDULE_CRON || '0 10 * * MON',
     tz: process.env.SCHEDULE_TZ || 'Europe/Moscow',
-    sourceUrl: process.env.SOURCE_URL!,
+    sourceUrl: process.env.SOURCE_URL || '',
     db: {
         host: process.env.DB_HOST || 'localhost',
         port: Number(process.env.DB_PORT || 5432),
@@ -23,6 +23,6 @@ export const config = {
     }
 } as const;
 
-if (!config.token || !config.chatId || !config.sourceUrl) {
-    throw new Error('⚠️ TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, SOURCE_URL обязательны');
+if (!config.token || !config.chatId) {
+    throw new Error('⚠️ TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID обязательны');
 }

@@ -6,13 +6,31 @@ const sleep = (ms: number) => new Promise<void>(res => setTimeout(res, ms));
 // Кликаем чекбоксы по name=value, если присутствуют на странице
 async function setCheckbox(page: Page, name: string, value: string) {
     const sel = `input[type="checkbox"][name="${name}"][value="${value}"]`;
-    const handle = await page.waitForSelector(sel, { timeout: 10_000 }).catch(() => null);
-    if (!handle) return;
+    try {
+        const handle = await page.waitForSelector(sel, { timeout: 5_000, visible: true }).catch(() => null);
+        if (!handle) {
+            log.warn(`Checkbox не найден: ${sel}`);
+            return;
+        }
 
-    const checked = await page.evaluate((el: HTMLInputElement) => el.checked, handle as any);
-    if (!checked) {
-        await (handle as any).click();
-        await sleep(150);
+        const checked = await page.evaluate((el: HTMLInputElement) => el.checked, handle as any);
+        if (!checked) {
+            // Проверим, что элемент действительно кликабелен
+            const isClickable = await page.evaluate((el) => {
+                const rect = el.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+            }, handle as any);
+
+            if (!isClickable) {
+                log.warn(`Checkbox не кликабелен: ${sel}`);
+                return;
+            }
+
+            await (handle as any).click();
+            await sleep(150);
+        }
+    } catch (e) {
+        log.warn(`Ошибка при клике на чекбокс ${sel}:`, e);
     }
 }
 
@@ -27,7 +45,7 @@ export async function grabPageHtmlWithFilters(url: string) {
 
     await page.goto(url, { waitUntil: 'networkidle2' });
 
-    // Фильтры по ТЗ
+    // Фильтры
     await setCheckbox(page, 'QpGameSearch[format][]', '0'); // офлайн
     for (const v of ['1', '5', '2', '9']) {                 // типы
         await setCheckbox(page, 'QpGameSearch[type][]', v);
