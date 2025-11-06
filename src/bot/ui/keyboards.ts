@@ -1,7 +1,8 @@
 import { InlineKeyboard } from 'grammy';
+
+import { CITIES } from '../cities.js';
 import { CB } from '../constants.js';
 import { createButtonId } from './buttonMapping.js';
-import { CITIES } from '../cities.js';
 
 export function moreKeyboard(nextOffset: number, limit: number) {
     const kb = new InlineKeyboard();

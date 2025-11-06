@@ -1,8 +1,13 @@
-import { grabPageHtmlWithFilters } from '../scraper/fetch.js';
-import { parseQuizPlease } from '../scraper/parse.js';
-import { normalize } from '../scraper/normalize.js';
-import { upsertGame, findUpcomingGames, findUpcomingGroups, listExcludedTypes } from '../db/repositories.js';
 import { config } from '../config.js';
+import {
+    findUpcomingGames,
+    findUpcomingGroups,
+    listExcludedTypes,
+    upsertGame,
+} from '../db/repositories.js';
+import { grabPageHtmlWithFilters } from '../scraper/fetch.js';
+import { normalize } from '../scraper/normalize.js';
+import { parseQuizPlease } from '../scraper/parse.js';
 import { log } from '../utils/logger.js';
 import { syncQueue } from '../utils/syncQueue.js';
 

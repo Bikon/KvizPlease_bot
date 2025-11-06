@@ -1,9 +1,10 @@
 import cron from 'node-cron';
-import { config } from './config.js';
-import { log } from './utils/logger.js';
-import { syncGames } from './services/gameService.js';
-import { listChatsWithSourceAndLastSync, setChatSetting } from './db/repositories.js';
 import type { Bot } from 'grammy';
+
+import { config } from './config.js';
+import { listChatsWithSourceAndLastSync, setChatSetting } from './db/repositories.js';
+import { syncGames } from './services/gameService.js';
+import { log } from './utils/logger.js';
 
 export function setupScheduler(bot: Bot) {
     // Проверяем ежечасно автосинк

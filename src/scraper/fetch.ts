@@ -1,4 +1,5 @@
-import puppeteer, { Page } from 'puppeteer';
+import puppeteer, { type Page } from 'puppeteer';
+
 import { log } from '../utils/logger.js';
 
 const sleep = (ms: number) => new Promise<void>(res => setTimeout(res, ms));

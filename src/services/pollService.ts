@@ -1,7 +1,8 @@
 import { Bot } from 'grammy';
-import { config } from '../config.js';
+
 import { insertPoll, mapPollOption, upsertVote } from '../db/repositories.js';
-import { formatGameDateTime, pad } from '../utils/dateFormatter.js';
+import { formatGameDateTime } from '../utils/dateFormatter.js';
+import type { DbGame, PollGroup } from '../types.js';
 
 // Нейминг опросов:
 // - Классика: "Квиз, плиз (Классика) #1217"

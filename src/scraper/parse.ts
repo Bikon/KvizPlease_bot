@@ -1,5 +1,6 @@
 import * as cheerio from 'cheerio';
-import { RawGame } from '../types.js';
+
+import type { RawGame } from '../types.js';
 
 export function parseQuizPlease(html: string, baseUrl: string): RawGame[] {
     const $ = cheerio.load(html);

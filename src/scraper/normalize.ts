@@ -1,10 +1,10 @@
 import dayjs from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat.js';
-import utc from 'dayjs/plugin/utc.js';
 import timezone from 'dayjs/plugin/timezone.js';
+import utc from 'dayjs/plugin/utc.js';
 import 'dayjs/locale/ru.js';
 
-import type { RawGame, Game } from '../types.js';
+import type { Game, RawGame } from '../types.js';
 
 dayjs.extend(customParseFormat as any);
 dayjs.extend(utc as any);
