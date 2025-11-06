@@ -37,7 +37,8 @@ class SyncQueue {
 
         try {
             if (!this.syncFunction) {
-                throw new Error('Sync function not set');
+                task.reject(new Error('Sync function not set'));
+                return;
             }
             const result = await this.syncFunction(task.chatId, task.sourceUrl);
             task.resolve(result);

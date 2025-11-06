@@ -178,7 +178,7 @@ export function createBot() {
             const afterCount = await countAllUpcomingGames(chatId, config.filters.daysAhead, config.filters.districts);
             const newGamesCount = Math.max(0, afterCount - beforeCount);
             
-            let message = '';
+            let message;
             if (beforeCount === 0) {
                 // Первая синхронизация
                 const filtered = added - afterCount;

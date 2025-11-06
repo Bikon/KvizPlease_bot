@@ -23,7 +23,7 @@ export function parseQuizPlease(html: string, baseUrl: string): RawGame[] {
 
         // gameType: либо в квадратных скобках, либо «Квиз, плиз!»
         let gameType = titleLeft.trim();
-        const bracket = gameType.match(/\[.+?\].*/);
+        const bracket = gameType.match(/\[.+?].*/);
         if (bracket) gameType = bracket[0].trim();
 
         const dateLine = block.find('.block-date-with-language-game').first().text().trim();

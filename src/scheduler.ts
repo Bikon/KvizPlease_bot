@@ -8,7 +8,7 @@ import { log } from './utils/logger.js';
 
 export function setupScheduler(bot: Bot) {
     // Проверяем ежечасно автосинк
-    const task = cron.schedule('0 * * * *', async () => {
+    cron.schedule('0 * * * *', async () => {
         try {
             const now = Date.now();
             
@@ -39,6 +39,4 @@ export function setupScheduler(bot: Bot) {
             log.error('Scheduler failed:', e);
         }
     }, { timezone: config.tz });
-
-    return task;
 }
