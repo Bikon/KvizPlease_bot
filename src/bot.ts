@@ -330,7 +330,7 @@ export function createBot() {
         }
     });
 
-    // Показ групп (выпусков) списком без кнопок
+    // Показ пакетов игр списком без кнопок
     bot.command('gamepacks', async (ctx) => {
         const rows = await getUpcomingGroups(getChatId(ctx));
         if (!rows.length) return ctx.reply('Пакетов игр не найдено.');
@@ -350,25 +350,25 @@ export function createBot() {
         msg += '\n\n📖 Легенда:\n';
         msg += '✅ — сыграно\n';
         msg += '🗳 — опрос по пакету создан\n';
-        msg += '📅 — опрос по дате создан';
+        msg += '📅 — игра из пакета участвует в опросе по дате';
 
         await ctx.reply(msg);
     });
 
-    // Пометить выпуск(и) как сыгранные: текстовый режим, клавиатура, список
+    // Пометить пакет(ы) как сыгранные: текстовый режим, клавиатура, список
     bot.command('played', async (ctx) => {
         const arg = (ctx.match as string | undefined)?.trim() || '';
         if (!arg) {
             const rows = await getUpcomingGroups(getChatId(ctx));
             if (!rows.length) return ctx.reply('Пакетов игр не найдено.');
             const kb = buildPlayedKeyboard(rows);
-            return ctx.reply('Отметить выпуски как сыгранные/несыгранные:', { reply_markup: kb });
+            return ctx.reply('Отметить пакеты как сыгранные/несыгранные:', { reply_markup: kb });
         }
 
         if (arg.toLowerCase() === 'list') {
             const rows = await getUpcomingGroups(getChatId(ctx));
             const played = rows.filter((r: any) => r.played);
-            if (!played.length) return ctx.reply('Сыгранных выпусков нет.');
+            if (!played.length) return ctx.reply('Сыгранных пакетов нет.');
             const msg = played.map((r: any) => `${r.type_name} #${r.num}`).join('\n');
             return ctx.reply(msg);
         }
@@ -394,13 +394,13 @@ export function createBot() {
             const rows = await getUpcomingGroups(getChatId(ctx));
             if (!rows.length) return ctx.reply('Пакетов игр не найдено.');
             const kb = buildPlayedKeyboard(rows);
-            return ctx.reply('Отметить выпуски как сыгранные/несыгранные:', { reply_markup: kb });
+            return ctx.reply('Отметить пакеты как сыгранные/несыгранные:', { reply_markup: kb });
         }
 
         if (arg.toLowerCase() === 'list') {
             const rows = await getUpcomingGroups(getChatId(ctx));
             const unplayed = rows.filter((r: any) => !r.played);
-            if (!unplayed.length) return ctx.reply('Несыгранных выпусков нет.');
+            if (!unplayed.length) return ctx.reply('Несыгранных пакетов нет.');
             const msg = unplayed.map((r: any) => `${r.type_name} #${r.num}`).join('\n');
             return ctx.reply(msg);
         }
@@ -438,7 +438,7 @@ export function createBot() {
 
         // Без аргумента или "all" - создать для всех
         if (!arg || arg.toLowerCase() === 'all') {
-            await ctx.reply('Будут созданы опросы по выпускам, где дат два и более, и для которых опросы ещё не публиковались.');
+            await ctx.reply('Будут созданы опросы по пакетам игр, где дат два и более, и для которых опросы ещё не публиковались.');
             let created = 0;
             for (const row of rows) {
                 if (row.polled_by_package) continue; // Пропускаем только те, для которых опрос уже создан по пакету
@@ -538,11 +538,11 @@ export function createBot() {
             } else if (data.startsWith(CB.GROUP_EXCLUDE)) {
                 const key = data.slice(CB.GROUP_EXCLUDE.length);
                 await excludeGroup(key);
-                await ctx.answerCallbackQuery({ text: 'Выпуск исключён 🗑️' });
+                await ctx.answerCallbackQuery({ text: 'Пакет исключён 🗑️' });
             } else if (data.startsWith(CB.GROUP_UNEXCLUDE)) {
                 const key = data.slice(CB.GROUP_UNEXCLUDE.length);
                 await unexcludeGroup(key);
-                await ctx.answerCallbackQuery({ text: 'Выпуск возвращён ♻️' });
+                await ctx.answerCallbackQuery({ text: 'Пакет возвращён ♻️' });
             } else if (data.startsWith(CB.TYPE_EXCLUDE)) {
                 const buttonId = data.slice(CB.TYPE_EXCLUDE.length);
                 const t = resolveButtonId(buttonId);
