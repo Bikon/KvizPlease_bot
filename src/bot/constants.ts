@@ -6,6 +6,8 @@ export const CB = {
     TYPE_UNEXCLUDE: 'tu:',
     PLAYED_MARK: 'pm:',
     PLAYED_UNMARK: 'pu:',
+    CITY_SELECT: 'city:',
+    POLLS_BY_DATE: 'pbd:',
 } as const;
 
 export type CallbackPrefixes = typeof CB;

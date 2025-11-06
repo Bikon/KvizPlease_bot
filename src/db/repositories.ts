@@ -67,7 +67,13 @@ export async function findUpcomingGroups(daysAhead: number, allowedDistricts: st
             COUNT(*) as cnt,
             EXISTS (
                 SELECT 1 FROM polls p WHERE p.group_key = base.group_key AND p.chat_id = $3
-            ) AS polled
+            ) AS polled_by_package,
+            EXISTS (
+                SELECT 1 FROM games g2
+                JOIN poll_options po ON po.game_external_id = g2.external_id
+                JOIN polls p2 ON p2.poll_id = po.poll_id
+                WHERE g2.group_key = base.group_key AND g2.chat_id = $3 AND p2.chat_id = $3 AND p2.group_key IS NULL
+            ) AS polled_by_date
        FROM base
       GROUP BY group_key
       ORDER BY type_name, CAST(NULLIF(split_part(group_key,'#',2),'') AS INT) NULLS LAST;`,
@@ -176,6 +182,11 @@ export async function resetChatData(chatId: string): Promise<void> {
     await pool.query('DELETE FROM polls WHERE chat_id=$1', [chatId]);
 }
 
+export async function deletePastGames(chatId: string): Promise<number> {
+    const res = await pool.query('DELETE FROM games WHERE chat_id=$1 AND date_time < now() RETURNING id', [chatId]);
+    return res.rowCount ?? 0;
+}
+
 export async function listChatsWithSourceAndLastSync(): Promise<Array<{ chat_id: string; source_url: string; last_sync_at: string | null }>> {
     const r = await pool.query(
         `SELECT s.chat_id,
@@ -187,3 +198,4 @@ export async function listChatsWithSourceAndLastSync(): Promise<Array<{ chat_id:
     );
     return r.rows;
 }
+

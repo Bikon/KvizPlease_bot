@@ -2,12 +2,12 @@ import { Bot } from 'grammy';
 import { config } from './config.js';
 import { log } from './utils/logger.js';
 import { syncGames, getFilteredUpcoming, getUpcomingGroups } from './services/gameService.js';
-import { postGroupPoll, handlePollAnswer } from './services/pollService.js';
-import { excludeGroup, markGroupPlayed, listExcludedTypes, excludeType, unexcludeType, unexcludeGroup, unmarkGroupPlayed, getChatSetting, setChatSetting, resetChatData, pool } from './db/repositories.js';
+import { postGroupPoll, handlePollAnswer, createPollsByDatePeriod } from './services/pollService.js';
+import { excludeGroup, markGroupPlayed, listExcludedTypes, excludeType, unexcludeType, unexcludeGroup, unmarkGroupPlayed, getChatSetting, setChatSetting, resetChatData, pool, deletePastGames } from './db/repositories.js';
 import { CB } from './bot/constants.js';
-import { moreKeyboard, buildTypesKeyboard } from './bot/ui/keyboards.js';
-import { buildPlayedKeyboard } from './bot/ui/keyboards.js';
+import { moreKeyboard, buildTypesKeyboard, buildPlayedKeyboard, buildCitySelectionKeyboard, buildPollsByDateKeyboard } from './bot/ui/keyboards.js';
 import { resolveButtonId } from './bot/ui/buttonMapping.js';
+import { CITIES } from './bot/cities.js';
 
 function getChatId(ctx: any): string {
     return String(
@@ -72,17 +72,19 @@ function buildUpcomingChunk(
 async function updateChatCommands(bot: Bot, chatId: string, hasSource: boolean) {
     const base = [
         { command: 'help', description: 'Список команд' },
-        { command: 'set_source', description: 'Установить ссылку' },
-        { command: 'groups', description: 'Показать пакеты' },
-        { command: 'upcoming', description: 'Будущие (по пакетам)' },
-        { command: 'upcoming_by_dates', description: 'Будущие (по датам)' },
+        { command: 'select_city', description: 'Выбрать город' },
+        { command: 'set_source', description: 'Установить ссылку на расписание вручную' },
+        { command: 'gamepacks', description: 'Показать пакеты игр' },
+        { command: 'upcoming', description: 'Будущие игры (по пакетам)' },
+        { command: 'upcoming_by_dates', description: 'Будущие игры (по датам)' },
         { command: 'poll', description: 'Создать опрос' },
-        { command: 'remove_game_types', description: 'Исключить типы' },
+        { command: 'polls_by_date', description: 'Опросы по периодам' },
+        { command: 'remove_game_types', description: 'Исключить типы пакетов' },
         { command: 'played', description: 'Отметить сыгранные' },
         { command: 'unplayed', description: 'Снять отметку' },
         { command: 'reset', description: 'Очистить данные' },
     ];
-    const withSync = hasSource ? [{ command: 'sync', description: 'Синхронизировать игры' }, ...base] : base;
+    const withSync = hasSource ? [{ command: 'sync', description: 'Синхронизировать игры из расписания' }, ...base] : base;
     await bot.api.setMyCommands(withSync, { scope: { type: 'chat', chat_id: chatId } as any });
 }
 
@@ -90,26 +92,34 @@ export function createBot() {
     const bot = new Bot(config.token);
 
     bot.command('start', async (ctx) => {
-        await ctx.reply('Привет! Я буду синхронизировать игры Квиз Плиз и формировать опросы. Используйте /help для списка команд.');
         const chatId = getChatId(ctx);
         const saved = (await getChatSetting(chatId, 'source_url')) || '';
-        if (!saved) {
-            await ctx.reply('Перейдите на страницу Квиз Плиз для вашего города, откройте страницу расписания игр и настройте фильтры. Затем пришлите сюда скопированную из браузера ссылку. Либо используйте команду /set_source <url>.');
-        } else {
-            await ctx.reply('Источник уже задан. Для смены используйте /set_source <url>. Смотри также /help.');
+        
+        // Если бот уже был настроен - предлагаем очистить историю
+        if (saved) {
+            await ctx.reply('С возвращением! Бот уже настроен.');
+            await ctx.reply('Хотите начать заново с очисткой всех данных? Используйте /reset\n\nДля продолжения работы с текущими данными используйте команды из меню или /help.');
+            await updateChatCommands(bot, chatId, true);
+            return;
         }
-        await updateChatCommands(bot, chatId, Boolean(saved));
+        
+        // Первый запуск
+        await ctx.reply('Привет! Я буду синхронизировать игры Квиз Плиз и формировать опросы. Используйте /help для списка команд.');
+        await ctx.reply('Выберите ваш город с помощью /select_city или укажите ссылку на расписание вручную командой /set_source <url>.');
+        await updateChatCommands(bot, chatId, false);
     });
 
     bot.command('help', async (ctx) => {
         await ctx.reply([
             'Доступные команды:',
-            '/set_source <url> — установить/сменить ссылку на расписание.',
-            '/sync — обновить данные игр из источника (дополняет существующие).',
+            '/select_city — выбрать город из списка (автоматически установит источник).',
+            '/set_source <url> — установить/сменить ссылку на расписание вручную.',
+            '/sync — обновить данные игр из источника (дополняет существующие, удаляет прошедшие).',
             '/upcoming [N] — показать будущих N игр, сгруппировано по пакетам (по умолчанию 15).',
             '/upcoming_by_dates [N] — показать будущих N игр, отсортировано по дате (по умолчанию 15).',
-            '/groups — показать список пакетов (игр) с количеством доступных дат.',
-            '/poll [N|all] — создать опрос (по номеру N из /groups, all для всех, без параметра = all).',
+            '/gamepacks — показать список пакетов (игр) с количеством доступных дат.',
+            '/poll [N|all] — создать опрос (по номеру N из /gamepacks, all для всех, без параметра = all).',
+            '/polls_by_date — создать опросы по играм, сгруппированным по дате (неделя/2 недели/месяц).',
             '/remove_game_types — открыть клавиатуру для исключения типов пакетов из обработки.',
             '/played [key,...|list] — отметить как сыгранные (список ключей, list для просмотра, без параметра = клавиатура).',
             '/unplayed [key,...|list] — снять отметку «сыграно».',
@@ -127,9 +137,42 @@ export function createBot() {
         }
         try {
             await ctx.reply('🔄 Синхронизация началась, это может занять до пары минут…');
-            const { added, skipped } = await syncGames(chatId, saved);
+            
+            // Получаем текущее количество игр перед синком
+            const beforeGames = await getFilteredUpcoming(chatId);
+            const beforeCount = beforeGames.length;
+            
+            // Удаляем устаревшие игры
+            const deletedPast = await deletePastGames(chatId);
+            
+            const { added, skipped, excluded } = await syncGames(chatId, saved);
+            
             await ctx.reply('✅ Синхронизация завершена.');
-            await ctx.reply(`Добавлено игр: ${added}. Пропущено: ${skipped}.`);
+            
+            // Вычисляем реально новые игры
+            const afterGames = await getFilteredUpcoming(chatId);
+            const afterCount = afterGames.length;
+            const newGamesCount = Math.max(0, afterCount - beforeCount);
+            
+            let message = '';
+            if (beforeCount === 0) {
+                message = `Добавлено игр: ${added}.\n` +
+                    `Всего в базе: ${afterCount}.\n` +
+                    `Пропущено: ${skipped}.\n`;
+            } else {
+                message = `Добавлено новых игр: ${newGamesCount}.\n` +
+                    `Всего в базе: ${afterCount}.\n` +
+                    `Исключено из обработки (по вашим настройкам): ${excluded}.\n` +
+                    `Пропущено: ${skipped}.\n`;
+            }
+            
+            if (deletedPast > 0) {
+                message += `Удалено игр с прошедшей датой: ${deletedPast}.\n`;
+            }
+            
+            message += `\nВоспользуйтесь командами из меню, чтобы получить информацию об играх или составить опросы об участии. Полный список команд с описанием можно получить с помощью /help`;
+            
+            await ctx.reply(message);
             await setChatSetting(chatId, 'last_sync_at', new Date().toISOString());
         } catch (e) {
             log.error(`[Chat ${chatId}] Sync command failed:`, e);
@@ -160,7 +203,7 @@ export function createBot() {
             }
             
             await setChatSetting(chatId, 'source_url', u.toString());
-            await ctx.reply('Источник сохранён. Теперь можно запустить /sync.');
+            await ctx.reply('Источник сохранён. Теперь можно запустить синхронизацию расписания игр /sync.');
             await updateChatCommands(bot, chatId, true);
         } catch {
             await ctx.reply('Некорректная ссылка. Пришлите полноценный URL со страницы расписания официального сайта Квиз Плиз вашего города');
@@ -186,7 +229,7 @@ export function createBot() {
             
             // Устанавливаем новый источник
             await setChatSetting(chatId, 'source_url', pendingUrl);
-            await ctx.reply('✅ Все данные удалены. Новый источник установлен. Теперь можно запустить /sync.');
+            await ctx.reply('✅ Все данные удалены. Новый источник установлен. Теперь можно запустить синхронизацию расписания игр /sync.');
             await updateChatCommands(bot, chatId, true);
         } catch (e) {
             log.error('set_source_confirm error:', e);
@@ -194,29 +237,13 @@ export function createBot() {
         }
     });
 
-    // Если источник ещё не задан, примем первое текстовое сообщение с URL как установку источника
-    bot.on('message:text', async (ctx, next) => {
+    // Выбор города из списка
+    bot.command('select_city', async (ctx) => {
         const chatId = getChatId(ctx);
-        const saved = (await getChatSetting(chatId, 'source_url')) || '';
-        const text = ctx.message.text.trim();
-        if (!text.startsWith('/') && !saved) {
-            try {
-                const u = new URL(text);
-                
-                // Проверяем, что это ссылка на расписание Квиз Плиз
-                if (!u.hostname.includes('quizplease.ru') || !u.pathname.includes('/schedule')) {
-                    await ctx.reply('Похоже, вы прислали не ту ссылку. Перейдите в раздел «Расписание» на официальном сайте Квиз Плиз для вашего города и пришлите ссылку.');
-                    return;
-                }
-                
-                await setChatSetting(chatId, 'source_url', u.toString());
-                await ctx.reply('Источник сохранён. Теперь можно запустить /sync.');
-                await updateChatCommands(bot, chatId, true);
-                return;
-            } catch {}
-        }
-        return next();
+        const kb = buildCitySelectionKeyboard();
+        await ctx.reply('Выберите ваш город из списка:\n\nЕсли вашего города нет в списке, используйте команду /set_source <url> для ручной установки ссылки.', { reply_markup: kb });
     });
+
 
     bot.command('upcoming', async (ctx) => {
         try {
@@ -305,7 +332,7 @@ export function createBot() {
     });
 
     // Показ групп (выпусков) списком без кнопок
-    bot.command('groups', async (ctx) => {
+    bot.command('gamepacks', async (ctx) => {
         const rows = await getUpcomingGroups(getChatId(ctx));
         if (!rows.length) return ctx.reply('Пакетов игр не найдено.');
 
@@ -313,9 +340,18 @@ export function createBot() {
         let msg = rows.map((r: any, i: number) => {
             const name = r.type_name;
             const n = r.num || '?';
-            const icons = `${r.played ? '✅ ' : ''}${r.polled ? '🗳 ' : ''}`;
+            let icons = '';
+            if (r.played) icons += '✅ ';
+            if (r.polled_by_package) icons += '🗳 ';
+            if (r.polled_by_date) icons += '📅 ';
             return `${i + 1}. ${icons}${name} #${n} — дат: ${r.cnt}`;
         }).join('\n');
+
+        // Добавляем легенду
+        msg += '\n\n📖 Легенда:\n';
+        msg += '✅ — сыграно\n';
+        msg += '🗳 — опрос по пакету создан\n';
+        msg += '📅 — опрос по дате создан';
 
         await ctx.reply(msg);
     });
@@ -406,7 +442,7 @@ export function createBot() {
             await ctx.reply('Будут созданы опросы по выпускам, где дат два и более, и для которых опросы ещё не публиковались.');
             let created = 0;
             for (const row of rows) {
-                if (row.polled) continue;
+                if (row.polled_by_package) continue; // Пропускаем только те, для которых опрос уже создан по пакету
                 const ok = await createForRow(row);
                 if (ok) created++;
             }
@@ -440,13 +476,65 @@ export function createBot() {
         await ctx.reply('Управление типами игр (нажатие исключает/возвращает тип):', { reply_markup: kb });
     });
 
+    // Создание опросов по датам (не по пакетам)
+    bot.command('polls_by_date', async (ctx) => {
+        const chatId = getChatId(ctx);
+        const kb = buildPollsByDateKeyboard();
+        await ctx.reply(
+            'Создание опросов по играм, сгруппированным по периоду времени.\n\n' +
+            'Будут созданы опросы, где каждый опрос охватывает игры в указанном периоде. ' +
+            'Название опроса — период времени. Варианты ответа — отдельные игры с датами и местами.\n\n' +
+            'Выберите период:',
+            { reply_markup: kb }
+        );
+    });
+
     // Коллбэки
     bot.on('callback_query:data', async (ctx) => {
         const data = ctx.callbackQuery.data!;
+        const chatId = getChatId(ctx);
         try {
-            if (data.startsWith(CB.GROUP_PLAYED)) {
+            if (data.startsWith(CB.POLLS_BY_DATE)) {
+                const period = data.slice(CB.POLLS_BY_DATE.length);
+                let days = 7;
+                if (period === '2weeks') days = 14;
+                else if (period === 'month') days = 30;
+                
+                const games = await getFilteredUpcoming(chatId);
+                const created = await createPollsByDatePeriod(bot, chatId, games, days);
+                
+                await ctx.answerCallbackQuery({ text: created ? `Создано: ${created}` : 'Нет игр' });
+                if (created > 0) {
+                    const pollWord = created === 1 ? 'опрос' : created < 5 ? 'опроса' : 'опросов';
+                    await ctx.reply(`✅ Создано ${created} ${pollWord} для игр на ${days} дней вперёд.`);
+                } else {
+                    await ctx.reply('Нет игр в выбранном периоде.');
+                }
+            } else if (data.startsWith(CB.CITY_SELECT)) {
+                const cityKey = data.slice(CB.CITY_SELECT.length);
+                const city = CITIES[cityKey as keyof typeof CITIES];
+                
+                if (!city) {
+                    return await ctx.answerCallbackQuery({ text: 'Город не найден' });
+                }
+                
+                const currentUrl = await getChatSetting(chatId, 'source_url');
+                
+                // Если источник уже был установлен, требуем подтверждение
+                if (currentUrl && currentUrl !== city.url) {
+                    await setChatSetting(chatId, 'pending_source_url', city.url);
+                    await ctx.answerCallbackQuery({ text: `Город: ${city.name}` });
+                    await ctx.reply(`⚠️ Смена города на ${city.name} приведёт к удалению всех игр, настроек и опросов. Продолжить? Отправьте: /set_source_confirm`);
+                    return;
+                }
+                
+                await setChatSetting(chatId, 'source_url', city.url);
+                await ctx.answerCallbackQuery({ text: `Выбран ${city.name}` });
+                await ctx.reply(`✅ Город ${city.name} выбран. Теперь можно запустить синхронизацию расписания игр /sync.`);
+                await updateChatCommands(bot, chatId, true);
+            } else if (data.startsWith(CB.GROUP_PLAYED)) {
                 const key = data.slice(CB.GROUP_PLAYED.length);
-                await markGroupPlayed(getChatId(ctx), key);
+                await markGroupPlayed(chatId, key);
                 await ctx.answerCallbackQuery({ text: 'Отмечено как сыгранное ✅' });
             } else if (data.startsWith(CB.GROUP_EXCLUDE)) {
                 const key = data.slice(CB.GROUP_EXCLUDE.length);
@@ -518,7 +606,7 @@ export function createBot() {
         try {
             await resetChatData(chatId);
             await updateChatCommands(bot, chatId, false);
-            await ctx.reply('✅ Все данные чата удалены. Для начала работы отправьте ссылку на расписание или используйте /set_source.');
+            await ctx.reply('✅ Все данные чата удалены. Для начала работы выберите город с помощью /select_city или используйте /set_source для ручной установки ссылки.');
         } catch (e) {
             log.error('Reset error:', e);
             await ctx.reply('Ошибка при сбросе данных. См. логи.');

@@ -1,7 +1,7 @@
 import { grabPageHtmlWithFilters } from '../scraper/fetch.js';
 import { parseQuizPlease } from '../scraper/parse.js';
 import { normalize } from '../scraper/normalize.js';
-import { upsertGame, findUpcomingGames, findUpcomingGroups } from '../db/repositories.js';
+import { upsertGame, findUpcomingGames, findUpcomingGroups, listExcludedTypes } from '../db/repositories.js';
 import { config } from '../config.js';
 import { log } from '../utils/logger.js';
 import { syncQueue } from '../utils/syncQueue.js';
@@ -17,31 +17,40 @@ function extractGroupKey(title: string) {
     return { groupKey: `${typeName}#${num}`, typeName, number: num };
 }
 
-async function syncGamesInternal(chatId: string, sourceUrl: string): Promise<{ added: number; skipped: number }> {
+async function syncGamesInternal(chatId: string, sourceUrl: string): Promise<{ added: number; skipped: number; excluded: number }> {
     const html = await grabPageHtmlWithFilters(sourceUrl);
     log.info(`[Chat ${chatId}] HTML grabbed & full list loaded`);
 
     const raw = parseQuizPlease(html, sourceUrl);
+    
+    // Получаем исключенные типы для этого чата
+    const excludedTypes = new Set((await listExcludedTypes(chatId)).map(t => t.toLowerCase()));
 
-    let ok = 0, skip = 0;
+    let ok = 0, skip = 0, excluded = 0;
     for (const r of raw) {
         const g = normalize(r);
         if (!g) { skip++; continue; }
 
-        const { groupKey } = extractGroupKey(r.title);
+        const { groupKey, typeName } = extractGroupKey(r.title);
         g.groupKey = groupKey;
+        
+        // Пропускаем игры исключенных типов
+        if (excludedTypes.has(typeName.toLowerCase())) {
+            excluded++;
+            continue;
+        }
 
         await upsertGame(g, chatId, sourceUrl);
         ok++;
     }
-    log.info(`[Chat ${chatId}] Synced games: ${ok}, skipped: ${skip}`);
-    return { added: ok, skipped: skip };
+    log.info(`[Chat ${chatId}] Synced games: ${ok}, excluded: ${excluded}, skipped: ${skip}`);
+    return { added: ok, skipped: skip, excluded };
 }
 
 // Initialize queue with the sync function
 syncQueue.setSyncFunction(syncGamesInternal);
 
-export async function syncGames(chatId: string, sourceUrl: string): Promise<{ added: number; skipped: number }> {
+export async function syncGames(chatId: string, sourceUrl: string): Promise<{ added: number; skipped: number; excluded: number }> {
     const status = syncQueue.getStatus();
     log.info(`[Chat ${chatId}] Sync requested. Queue status: ${status.running}/${status.maxConcurrency} running, ${status.queued} queued`);
     return await syncQueue.enqueue(chatId, sourceUrl);

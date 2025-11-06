@@ -6,21 +6,28 @@ import { listChatsWithSourceAndLastSync, setChatSetting } from './db/repositorie
 import type { Bot } from 'grammy';
 
 export function setupScheduler(bot: Bot) {
-    // Проверяем ежечасно, у каких чатов прошла неделя с последнего ручного /sync
+    // Проверяем ежечасно автосинк
     const task = cron.schedule('0 * * * *', async () => {
         try {
-            const rows = await listChatsWithSourceAndLastSync();
             const now = Date.now();
-            for (const r of rows) {
-                if (!r.last_sync_at) continue; // счётчик запускается после ручного /sync
+            
+            // Автосинк (раз в неделю после последнего ручного)
+            const syncRows = await listChatsWithSourceAndLastSync();
+            for (const r of syncRows) {
+                if (!r.last_sync_at) continue;
                 const last = Date.parse(r.last_sync_at);
                 if (!Number.isFinite(last)) continue;
                 const weekMs = 7 * 24 * 60 * 60 * 1000;
                 if (now - last >= weekMs) {
                     try {
-                        const { added, skipped } = await syncGames(r.chat_id, r.source_url);
-                        await bot.api.sendMessage(r.chat_id, '✅ Синхронизация завершена.');
-                        await bot.api.sendMessage(r.chat_id, `Добавлено игр: ${added}. Пропущено: ${skipped}.`);
+                        const { added, skipped, excluded } = await syncGames(r.chat_id, r.source_url);
+                        await bot.api.sendMessage(r.chat_id, '✅ Автоматическая синхронизация завершена.');
+                        await bot.api.sendMessage(
+                            r.chat_id,
+                            `Добавлено игр: ${added}.\n` +
+                            `Исключено из обработки: ${excluded}.\n` +
+                            `Пропущено: ${skipped}.`
+                        );
                         await setChatSetting(r.chat_id, 'last_sync_at', new Date().toISOString());
                     } catch (e) {
                         log.error('Auto sync failed for chat', r.chat_id, e);
@@ -28,7 +35,7 @@ export function setupScheduler(bot: Bot) {
                 }
             }
         } catch (e) {
-            log.error('Auto sync scheduler failed:', e);
+            log.error('Scheduler failed:', e);
         }
     }, { timezone: config.tz });
 

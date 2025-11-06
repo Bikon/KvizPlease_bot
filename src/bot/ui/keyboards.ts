@@ -1,6 +1,7 @@
 import { InlineKeyboard } from 'grammy';
 import { CB } from '../constants.js';
 import { createButtonId } from './buttonMapping.js';
+import { CITIES } from '../cities.js';
 
 export function moreKeyboard(nextOffset: number, limit: number) {
     const kb = new InlineKeyboard();
@@ -29,6 +30,33 @@ export function buildPlayedKeyboard(groups: Array<{ group_key: string; type_name
         const cb = (g.played ? CB.PLAYED_UNMARK : CB.PLAYED_MARK) + buttonId;
         kb.text(label, cb).row();
     }
+    return kb;
+}
+
+export function buildCitySelectionKeyboard() {
+    const kb = new InlineKeyboard();
+    const cities = Object.entries(CITIES);
+    
+    // Показываем по 2 города в ряд
+    for (let i = 0; i < cities.length; i += 2) {
+        const [key1, city1] = cities[i];
+        kb.text(city1.name, CB.CITY_SELECT + key1);
+        
+        if (i + 1 < cities.length) {
+            const [key2, city2] = cities[i + 1];
+            kb.text(city2.name, CB.CITY_SELECT + key2);
+        }
+        kb.row();
+    }
+    
+    return kb;
+}
+
+export function buildPollsByDateKeyboard() {
+    const kb = new InlineKeyboard();
+    kb.text('📅 Неделя', CB.POLLS_BY_DATE + 'week');
+    kb.text('📅 2 недели', CB.POLLS_BY_DATE + '2weeks');
+    kb.text('📅 Месяц', CB.POLLS_BY_DATE + 'month');
     return kb;
 }
 

@@ -8,12 +8,14 @@ const bot = createBot();
 (async () => {
   await bot.api.setMyCommands([
     { command: 'help', description: 'Список команд' },
-    { command: 'set_source', description: 'Установить ссылку на расписание' },
-    { command: 'sync', description: 'Синхронизировать игры' },
-    { command: 'groups', description: 'Показать пакеты/даты' },
+    { command: 'select_city', description: 'Выбрать город' },
+    { command: 'set_source', description: 'Установить ссылку на расписание вручную' },
+    { command: 'sync', description: 'Синхронизировать игры из расписания' },
+    { command: 'gamepacks', description: 'Показать пакеты/даты' },
     { command: 'upcoming', description: 'Будущие игры (по пакетам)' },
     { command: 'upcoming_by_dates', description: 'Будущие игры (по датам)' },
     { command: 'poll', description: 'Создать опрос (номер|all)' },
+    { command: 'polls_by_date', description: 'Опросы по периодам' },
     { command: 'remove_game_types', description: 'Исключить типы пакетов' },
     { command: 'played', description: 'Отметить как сыгранные' },
     { command: 'unplayed', description: 'Снять отметку сыграно' },

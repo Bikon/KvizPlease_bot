@@ -3,7 +3,7 @@ import { log } from './logger.js';
 type SyncTask = {
     chatId: string;
     sourceUrl: string;
-    resolve: (value: { added: number; skipped: number }) => void;
+    resolve: (value: { added: number; skipped: number; excluded: number }) => void;
     reject: (error: any) => void;
 };
 
@@ -11,13 +11,13 @@ class SyncQueue {
     private queue: SyncTask[] = [];
     private running = 0;
     private maxConcurrency = 5;
-    private syncFunction: ((chatId: string, sourceUrl: string) => Promise<{ added: number; skipped: number }>) | null = null;
+    private syncFunction: ((chatId: string, sourceUrl: string) => Promise<{ added: number; skipped: number; excluded: number }>) | null = null;
 
-    setSyncFunction(fn: (chatId: string, sourceUrl: string) => Promise<{ added: number; skipped: number }>) {
+    setSyncFunction(fn: (chatId: string, sourceUrl: string) => Promise<{ added: number; skipped: number; excluded: number }>) {
         this.syncFunction = fn;
     }
 
-    async enqueue(chatId: string, sourceUrl: string): Promise<{ added: number; skipped: number }> {
+    async enqueue(chatId: string, sourceUrl: string): Promise<{ added: number; skipped: number; excluded: number }> {
         return new Promise((resolve, reject) => {
             this.queue.push({ chatId, sourceUrl, resolve, reject });
             this.process();

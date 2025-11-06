@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS games (
     source_url TEXT,
     created_at TIMESTAMPTZ DEFAULT now(),
     updated_at TIMESTAMPTZ DEFAULT now(),
+    last_seen_at TIMESTAMPTZ DEFAULT now(),
     played BOOLEAN DEFAULT false,
     excluded BOOLEAN DEFAULT false,
     UNIQUE(chat_id, external_id)
