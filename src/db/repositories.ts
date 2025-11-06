@@ -42,6 +42,27 @@ export async function findUpcomingGames(daysAhead: number, allowedDistricts: str
     return res.rows as any[];
 }
 
+// получить количество всех будущих игр с учётом основных фильтров (для точной статистики синхронизации)
+export async function countAllUpcomingGames(chatId: string, daysAhead: number = 30, allowedDistricts: string[] = []) {
+    const res = await pool.query(
+        `SELECT COUNT(*) as count
+         FROM games g
+         LEFT JOIN excluded_groups eg ON eg.group_key = g.group_key
+         LEFT JOIN chat_excluded_types cet ON cet.type_name = split_part(g.group_key, '#', 1) AND cet.chat_id = $1
+         LEFT JOIN chat_played_groups cpg ON cpg.group_key = g.group_key AND cpg.chat_id = $1
+         WHERE g.chat_id = $1
+           AND g.date_time >= now()
+           AND g.date_time <= now() + ($2::text || ' days')::interval
+           AND (CASE WHEN $3::text[] IS NULL THEN true ELSE g.district = ANY($3) END)
+           AND NOT g.excluded
+           AND eg.group_key IS NULL
+           AND cet.type_name IS NULL
+           AND cpg.group_key IS NULL`,
+        [chatId, String(daysAhead), allowedDistricts.length ? allowedDistricts : null]
+    );
+    return parseInt(res.rows[0]?.count || '0', 10);
+}
+
 // сгруппировать на стороне БД признаком group_key (для /groups)
 export async function findUpcomingGroups(daysAhead: number, allowedDistricts: string[], chatId: string) {
     const res = await pool.query(

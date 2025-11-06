@@ -1,6 +1,7 @@
 import { Bot } from 'grammy';
 import { config } from '../config.js';
 import { insertPoll, mapPollOption, upsertVote } from '../db/repositories.js';
+import { formatGameDateTime, pad } from '../utils/dateFormatter.js';
 
 // Нейминг опросов:
 // - Классика: "Квиз, плиз (Классика) #1217"
@@ -15,12 +16,7 @@ export async function postGroupPoll(bot: Bot, chatId: string | number, group: { 
     if (!group.items.length) return null;
 
     const options = group.items.map((g) => {
-        const dt = new Date(g.date_time);
-        const pad = (n: number) => String(n).padStart(2, '0');
-        const dd = pad(dt.getDate());
-        const mm = pad(dt.getMonth() + 1);
-        const hh = pad(dt.getHours());
-        const mi = pad(dt.getMinutes());
+        const { dd, mm, hh, mi } = formatGameDateTime(g.date_time);
         const place = g.venue ?? '';
         return `${dd}.${mm} в ${hh}:${mi} ${place}`.trim();
     });
@@ -69,8 +65,10 @@ export async function createPollsByDatePeriod(bot: Bot, chatId: string | number,
         new Date(a.date_time).getTime() - new Date(b.date_time).getTime()
     );
     
-    const pad = (n: number) => String(n).padStart(2, '0');
-    const formatDate = (d: Date) => `${pad(d.getDate())}.${pad(d.getMonth() + 1)}`;
+    const formatDate = (d: Date) => {
+        const { dd, mm } = formatGameDateTime(d);
+        return `${dd}.${mm}`;
+    };
     
     // Разбиваем на чанки по 9 игр (оставляем место для "не смогу")
     const chunkSize = 9;
@@ -88,13 +86,9 @@ export async function createPollsByDatePeriod(bot: Bot, chatId: string | number,
         
         // Формируем варианты ответов
         const options = chunk.map((g) => {
-            const dt = new Date(g.date_time);
-            const dd = pad(dt.getDate());
-            const mm = pad(dt.getMonth() + 1);
-            const hh = pad(dt.getHours());
-            const mi = pad(dt.getMinutes());
+            const { dd, mm, hh, mi } = formatGameDateTime(g.date_time);
             const venue = g.venue ?? '';
-            const title = g.title.length > 30 ? g.title.substring(0, 27) + '...' : g.title;
+            const title = g.title.length > 50 ? g.title.substring(0, 47) + '...' : g.title;
             return `${dd}.${mm} ${hh}:${mi} - ${title} (${venue})`.trim();
         });
         

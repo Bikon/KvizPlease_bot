@@ -3,11 +3,12 @@ import { config } from './config.js';
 import { log } from './utils/logger.js';
 import { syncGames, getFilteredUpcoming, getUpcomingGroups } from './services/gameService.js';
 import { postGroupPoll, handlePollAnswer, createPollsByDatePeriod } from './services/pollService.js';
-import { excludeGroup, markGroupPlayed, listExcludedTypes, excludeType, unexcludeType, unexcludeGroup, unmarkGroupPlayed, getChatSetting, setChatSetting, resetChatData, pool, deletePastGames } from './db/repositories.js';
+import { excludeGroup, markGroupPlayed, listExcludedTypes, excludeType, unexcludeType, unexcludeGroup, unmarkGroupPlayed, getChatSetting, setChatSetting, resetChatData, pool, deletePastGames, countAllUpcomingGames } from './db/repositories.js';
 import { CB } from './bot/constants.js';
 import { moreKeyboard, buildTypesKeyboard, buildPlayedKeyboard, buildCitySelectionKeyboard, buildPollsByDateKeyboard } from './bot/ui/keyboards.js';
 import { resolveButtonId } from './bot/ui/buttonMapping.js';
 import { CITIES } from './bot/cities.js';
+import { formatGameDateTime } from './utils/dateFormatter.js';
 
 function getChatId(ctx: any): string {
     return String(
@@ -26,13 +27,7 @@ function parseLimit(text: string | undefined, def = 15) {
 
 // Формат одной игры (ровно как у вас раньше)
 function formatGame(g: any, idx: number) {
-    const dt = new Date(g.date_time);
-    const pad = (x: number) => String(x).padStart(2, '0');
-    const dd = pad(dt.getDate());
-    const mm = pad(dt.getMonth() + 1);
-    const yyyy = dt.getFullYear();
-    const hh = pad(dt.getHours());
-    const mi = pad(dt.getMinutes());
+    const { dd, mm, yyyy, hh, mi } = formatGameDateTime(g.date_time);
     const place = g.venue ?? '-';
     const url = g.url ?? '';
 
@@ -138,9 +133,8 @@ export function createBot() {
         try {
             await ctx.reply('🔄 Синхронизация началась, это может занять до пары минут…');
             
-            // Получаем текущее количество игр перед синком
-            const beforeGames = await getFilteredUpcoming(chatId);
-            const beforeCount = beforeGames.length;
+            // Получаем текущее количество игр перед синком (с учётом фильтров)
+            const beforeCount = await countAllUpcomingGames(chatId, config.filters.daysAhead, config.filters.districts);
             
             // Удаляем устаревшие игры
             const deletedPast = await deletePastGames(chatId);
@@ -149,19 +143,24 @@ export function createBot() {
             
             await ctx.reply('✅ Синхронизация завершена.');
             
-            // Вычисляем реально новые игры
-            const afterGames = await getFilteredUpcoming(chatId);
-            const afterCount = afterGames.length;
+            // Получаем количество после синка (с учётом фильтров)
+            const afterCount = await countAllUpcomingGames(chatId, config.filters.daysAhead, config.filters.districts);
             const newGamesCount = Math.max(0, afterCount - beforeCount);
             
             let message = '';
             if (beforeCount === 0) {
-                message = `Добавлено игр: ${added}.\n` +
-                    `Всего в базе: ${afterCount}.\n` +
-                    `Пропущено: ${skipped}.\n`;
+                // Первая синхронизация
+                const filtered = added - afterCount;
+                message = `Добавлено игр в базу: ${added}.\n` +
+                    `Доступно для отображения: ${afterCount}.\n`;
+                if (filtered > 0) {
+                    message += `Скрыто фильтрами (за пределами 30 дней или другие ограничения): ${filtered}.\n`;
+                }
+                message += `Пропущено: ${skipped}.\n`;
             } else {
+                // Последующие синхронизации
                 message = `Добавлено новых игр: ${newGamesCount}.\n` +
-                    `Всего в базе: ${afterCount}.\n` +
+                    `Всего доступно: ${afterCount}.\n` +
                     `Исключено из обработки (по вашим настройкам): ${excluded}.\n` +
                     `Пропущено: ${skipped}.\n`;
             }
