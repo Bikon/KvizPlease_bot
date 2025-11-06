@@ -1,16 +1,47 @@
+import type { Context } from 'grammy';
 import { Bot } from 'grammy';
-import { config } from './config.js';
-import { log } from './utils/logger.js';
-import { syncGames, getFilteredUpcoming, getUpcomingGroups } from './services/gameService.js';
-import { postGroupPoll, handlePollAnswer, createPollsByDatePeriod } from './services/pollService.js';
-import { excludeGroup, markGroupPlayed, listExcludedTypes, excludeType, unexcludeType, unexcludeGroup, unmarkGroupPlayed, getChatSetting, setChatSetting, resetChatData, pool, deletePastGames, countAllUpcomingGames } from './db/repositories.js';
-import { CB } from './bot/constants.js';
-import { moreKeyboard, buildTypesKeyboard, buildPlayedKeyboard, buildCitySelectionKeyboard, buildPollsByDateKeyboard } from './bot/ui/keyboards.js';
-import { resolveButtonId } from './bot/ui/buttonMapping.js';
-import { CITIES } from './bot/cities.js';
-import { formatGameDateTime } from './utils/dateFormatter.js';
 
-function getChatId(ctx: any): string {
+import { config } from './config.js';
+import { CITIES } from './bot/cities.js';
+import { CB } from './bot/constants.js';
+import { resolveButtonId } from './bot/ui/buttonMapping.js';
+import {
+    buildCitySelectionKeyboard,
+    buildPlayedKeyboard,
+    buildPollsByDateKeyboard,
+    buildTypesKeyboard,
+    moreKeyboard,
+} from './bot/ui/keyboards.js';
+import {
+    countAllUpcomingGames,
+    deletePastGames,
+    excludeGroup,
+    excludeType,
+    getChatSetting,
+    listExcludedTypes,
+    markGroupPlayed,
+    pool,
+    resetChatData,
+    setChatSetting,
+    unexcludeGroup,
+    unexcludeType,
+    unmarkGroupPlayed,
+} from './db/repositories.js';
+import {
+    getFilteredUpcoming,
+    getUpcomingGroups,
+    syncGames,
+} from './services/gameService.js';
+import {
+    createPollsByDatePeriod,
+    handlePollAnswer,
+    postGroupPoll,
+} from './services/pollService.js';
+import { formatGameDateTime } from './utils/dateFormatter.js';
+import { log } from './utils/logger.js';
+import type { DbGame, DbGameGroup } from './types.js';
+
+function getChatId(ctx: Context): string {
     return String(
         ctx.chat?.id ??
         ctx.update?.message?.chat?.id ??
@@ -26,7 +57,7 @@ function parseLimit(text: string | undefined, def = 15) {
 }
 
 // Формат одной игры (ровно как у вас раньше)
-function formatGame(g: any, idx: number) {
+function formatGame(g: DbGame, idx: number): string {
     const { dd, mm, yyyy, hh, mi } = formatGameDateTime(g.date_time);
     const place = g.venue ?? '-';
     const url = g.url ?? '';
@@ -36,7 +67,7 @@ function formatGame(g: any, idx: number) {
 
 // Собираем текст порции и возвращаем nextOffset (если есть ещё)
 function buildUpcomingChunk(
-    games: any[],
+    games: DbGame[],
     offset: number,
     limit: number
 ): { text: string; nextOffset: number | null } {
@@ -336,7 +367,7 @@ export function createBot() {
         if (!rows.length) return ctx.reply('Пакетов игр не найдено.');
 
         // Краткий список
-        let msg = rows.map((r: any, i: number) => {
+        let msg = rows.map((r, i) => {
             const name = r.type_name;
             const n = r.num || '?';
             let icons = '';
@@ -367,9 +398,9 @@ export function createBot() {
 
         if (arg.toLowerCase() === 'list') {
             const rows = await getUpcomingGroups(getChatId(ctx));
-            const played = rows.filter((r: any) => r.played);
+            const played = rows.filter((r) => r.played);
             if (!played.length) return ctx.reply('Сыгранных пакетов нет.');
-            const msg = played.map((r: any) => `${r.type_name} #${r.num}`).join('\n');
+            const msg = played.map((r) => `${r.type_name} #${r.num}`).join('\n');
             return ctx.reply(msg);
         }
 
@@ -399,9 +430,9 @@ export function createBot() {
 
         if (arg.toLowerCase() === 'list') {
             const rows = await getUpcomingGroups(getChatId(ctx));
-            const unplayed = rows.filter((r: any) => !r.played);
+            const unplayed = rows.filter((r) => !r.played);
             if (!unplayed.length) return ctx.reply('Несыгранных пакетов нет.');
-            const msg = unplayed.map((r: any) => `${r.type_name} #${r.num}`).join('\n');
+            const msg = unplayed.map((r) => `${r.type_name} #${r.num}`).join('\n');
             return ctx.reply(msg);
         }
 
@@ -427,8 +458,8 @@ export function createBot() {
         const rows = await getUpcomingGroups(chatId);
         const games = await getFilteredUpcoming(chatId);
 
-        const createForRow = async (row: any, requireMultipleDates = true) => {
-            const items = games.filter((g: any) => g.group_key === row.group_key);
+        const createForRow = async (row: DbGameGroup, requireMultipleDates = true): Promise<boolean> => {
+            const items = games.filter((g) => g.group_key === row.group_key);
             if (requireMultipleDates && items.length < 2) return false;
             if (!items.length) return false;
             const group = { groupKey: row.group_key, name: row.type_name, number: row.num, items };
@@ -454,7 +485,7 @@ export function createBot() {
         const row = rows[idx - 1];
         if (!row) return ctx.reply('Группа с таким номером не найдена.');
         
-        const items = games.filter((g: any) => g.group_key === row.group_key);
+        const items = games.filter((g) => g.group_key === row.group_key);
         if (!items.length) {
             return ctx.reply(`❌ Для группы "${row.type_name} #${row.num}" не найдено дат.`);
         }
@@ -466,7 +497,7 @@ export function createBot() {
     // Управление типами
     bot.command('remove_game_types', async (ctx) => {
         const rows = await getUpcomingGroups(getChatId(ctx));
-        const allTypes = Array.from(new Set(rows.map((r: any) => String(r.type_name))));
+        const allTypes = Array.from(new Set(rows.map((r) => String(r.type_name))));
         const excluded = new Set(await listExcludedTypes(getChatId(ctx)));
 
         if (!allTypes.length) return ctx.reply('Пакеты (игры) не обнаружены.');
@@ -549,7 +580,7 @@ export function createBot() {
                 if (!t) return await ctx.answerCallbackQuery({ text: 'Ошибка: кнопка устарела' });
                 await excludeType(getChatId(ctx), t);
                 const rows = await getUpcomingGroups(getChatId(ctx));
-                const allTypes = Array.from(new Set(rows.map((r: any) => String(r.type_name))));
+                const allTypes = Array.from(new Set(rows.map((r) => String(r.type_name))));
                 const excluded = new Set(await listExcludedTypes(getChatId(ctx)));
                 const kb = buildTypesKeyboard(allTypes, excluded);
                 await ctx.editMessageReplyMarkup({ reply_markup: kb });
@@ -560,7 +591,7 @@ export function createBot() {
                 if (!t) return await ctx.answerCallbackQuery({ text: 'Ошибка: кнопка устарела' });
                 await unexcludeType(getChatId(ctx), t);
                 const rows = await getUpcomingGroups(getChatId(ctx));
-                const allTypes = Array.from(new Set(rows.map((r: any) => String(r.type_name))));
+                const allTypes = Array.from(new Set(rows.map((r) => String(r.type_name))));
                 const excluded = new Set(await listExcludedTypes(getChatId(ctx)));
                 const kb = buildTypesKeyboard(allTypes, excluded);
                 await ctx.editMessageReplyMarkup({ reply_markup: kb });

@@ -38,3 +38,41 @@ export type GameGroup = {
     played?: boolean;   // если все помечены как played или есть запись о played по группе
     excluded?: boolean; // если группа исключена (таблица excluded_groups или все items.excluded)
 };
+
+// Database row types
+export type DbGame = {
+    id: number;
+    chat_id: string;
+    external_id: string;
+    title: string;
+    date_time: Date;
+    venue: string | null;
+    district: string | null;
+    address: string | null;
+    price: string | null;
+    difficulty: string | null;
+    status: string | null;
+    url: string;
+    group_key: string | null;
+    source_url: string;
+    created_at: Date;
+    updated_at: Date;
+    excluded: boolean;
+};
+
+export type DbGameGroup = {
+    group_key: string;
+    type_name: string;
+    num: string;
+    played: boolean;
+    cnt: number;
+    polled_by_package: boolean;
+    polled_by_date: boolean;
+};
+
+export type PollGroup = {
+    groupKey: string;
+    name: string;
+    number: string;
+    items: DbGame[];
+};
