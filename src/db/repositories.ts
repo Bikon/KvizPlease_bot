@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { pool } from './pool.js';
-import type { DbGame, DbGameGroup, Game } from '../types.js';
+import type { Game } from '../types.js';
 
 export { pool };
 
