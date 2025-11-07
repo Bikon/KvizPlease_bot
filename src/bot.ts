@@ -269,7 +269,6 @@ export function createBot() {
 
     // Выбор города из списка
     bot.command('select_city', async (ctx) => {
-        const chatId = getChatId(ctx);
         const kb = buildCitySelectionKeyboard();
         await ctx.reply('Выберите ваш город из списка:\n\nЕсли вашего города нет в списке, используйте команду /set_source <url> для ручной установки ссылки.', { reply_markup: kb });
     });
@@ -508,7 +507,6 @@ export function createBot() {
 
     // Создание опросов по датам (не по пакетам)
     bot.command('polls_by_date', async (ctx) => {
-        const chatId = getChatId(ctx);
         const kb = buildPollsByDateKeyboard();
         await ctx.reply(
             'Создание опросов по играм, сгруппированным по периоду времени.\n\n' +
@@ -622,12 +620,13 @@ export function createBot() {
     });
 
     bot.on('poll_answer', async (ctx) => {
-        await handlePollAnswer(ctx.update.poll_answer);
+        const pollAnswer = ctx.update.poll_answer;
+        if (!pollAnswer.user) return;
+        await handlePollAnswer(pollAnswer as { poll_id: string; user: { id: number }; option_ids: number[] });
     });
 
     // Команда сброса всех данных чата
     bot.command('reset', async (ctx) => {
-        const chatId = getChatId(ctx);
         await ctx.reply('⚠️ Вы уверены? Это удалит все данные чата: источник, игры, настройки, опросы. Для подтверждения отправьте: /reset_confirm');
     });
 
