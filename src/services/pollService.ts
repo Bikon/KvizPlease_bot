@@ -39,10 +39,10 @@ export async function postGroupPoll(bot: Bot, chatId: string | number, group: { 
     return msg;
 }
 
-export async function handlePollAnswer(pollAnswer: { poll_id: string; user: { id: number }; option_ids: number[] }) {
-    const pollId = pollAnswer.poll_id;
-    const userId = pollAnswer.user.id;
-    const optionIds = pollAnswer.option_ids;
+export async function handlePollAnswer(pollAnswer: any) {
+    const pollId = pollAnswer.poll.id as string;
+    const userId = pollAnswer.user.id as number;
+    const optionIds = pollAnswer.option_ids as number[];
     await upsertVote(pollId, userId, optionIds);
 }
 
