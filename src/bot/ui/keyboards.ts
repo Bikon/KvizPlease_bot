@@ -61,3 +61,16 @@ export function buildPollsByDateKeyboard() {
     return kb;
 }
 
+export function buildMainMenuKeyboard() {
+    const kb = new InlineKeyboard();
+    kb.text('🔄 Синхронизация', 'menu:sync');
+    kb.text('📋 Пакеты игр', 'menu:gamepacks').row();
+    kb.text('📅 Будущие игры', 'menu:upcoming');
+    kb.text('🗳 Создать опросы', 'menu:poll').row();
+    kb.text('📆 Опросы по датам', 'menu:polls_by_date');
+    kb.text('✅ Отметить сыгранные', 'menu:played').row();
+    kb.text('🚫 Исключить типы', 'menu:remove_types');
+    kb.text('❓ Помощь', 'menu:help').row();
+    return kb;
+}
+
