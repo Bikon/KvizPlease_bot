@@ -7,6 +7,15 @@ import { log } from './utils/logger.js';
 const bot = createBot();
 
 (async () => {
+  // Verify bot connection
+  try {
+    const me = await bot.api.getMe();
+    log.info(`Bot connected successfully: @${me.username} (${me.first_name})`);
+  } catch (e) {
+    log.error('Failed to connect to Telegram API:', e);
+    process.exit(1);
+  }
+
   await bot.api.setMyCommands([
     { command: 'help', description: 'Список команд' },
     { command: 'select_city', description: 'Выбрать город' },

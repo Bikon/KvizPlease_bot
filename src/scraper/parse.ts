@@ -1,10 +1,14 @@
 import * as cheerio from 'cheerio';
 
+import { log } from '../utils/logger.js';
 import type { RawGame } from '../types.js';
 
 export function parseQuizPlease(html: string, baseUrl: string): RawGame[] {
     const $ = cheerio.load(html);
     const items: RawGame[] = [];
+    
+    const scheduleColumns = $('.schedule-column');
+    log.info(`[Parser] Found ${scheduleColumns.length} .schedule-column elements`);
 
     const toAbs = (href: string | undefined) => {
         if (!href) return baseUrl;
@@ -74,5 +78,6 @@ export function parseQuizPlease(html: string, baseUrl: string): RawGame[] {
         }
     });
 
+    log.info(`[Parser] Parsed ${items.length} games from HTML (${html.length} chars)`);
     return items;
 }

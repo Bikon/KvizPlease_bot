@@ -120,6 +120,23 @@ async function updateChatCommands(bot: Bot, chatId: string, hasSource: boolean) 
 export function createBot() {
     const bot = new Bot(config.token);
 
+    // Log all incoming updates for debugging
+    bot.use(async (ctx, next) => {
+        log.info('[Update received]', JSON.stringify({
+            update_id: ctx.update.update_id,
+            type: Object.keys(ctx.update).filter(k => k !== 'update_id')[0],
+            chat_id: ctx.chat?.id,
+            text: 'message' in ctx.update ? ctx.update.message?.text : undefined
+        }));
+        try {
+            await next();
+            log.info('[Update processed successfully]');
+        } catch (err) {
+            log.error('[Update processing error]', err);
+            throw err;
+        }
+    });
+
     bot.command('start', async (ctx) => {
         const chatId = getChatId(ctx);
         const saved = (await getChatSetting(chatId, 'source_url')) || '';
@@ -166,6 +183,33 @@ export function createBot() {
             await ctx.reply('❌ Диалог отменён.');
         } else {
             await ctx.reply('Нет активного диалога для отмены.');
+        }
+    });
+
+    // Команда сброса всех данных чата
+    bot.command('reset', async (ctx) => {
+        const chatId = getChatId(ctx);
+        log.info(`[Chat ${chatId}] /reset command handler triggered`);
+        try {
+            await ctx.reply('⚠️ Вы уверены? Это удалит все данные чата: источник, игры, настройки, опросы. Для подтверждения отправьте: /reset_confirm');
+            log.info(`[Chat ${chatId}] /reset reply sent successfully`);
+        } catch (err) {
+            log.error(`[Chat ${chatId}] /reset reply failed:`, err);
+            throw err;
+        }
+    });
+
+    bot.command('reset_confirm', async (ctx) => {
+        const chatId = getChatId(ctx);
+        log.info(`[Chat ${chatId}] /reset_confirm command handler triggered`);
+        try {
+            await resetChatData(chatId);
+            await updateChatCommands(bot, chatId, false);
+            await ctx.reply('✅ Все данные чата удалены. Для начала работы выберите город с помощью /select_city или используйте /set_source для ручной установки ссылки.');
+            log.info(`[Chat ${chatId}] Reset completed successfully`);
+        } catch (e) {
+            log.error('Reset error:', e);
+            await ctx.reply('Ошибка при сбросе данных. См. логи.');
         }
     });
 
@@ -653,12 +697,15 @@ export function createBot() {
     });
 
     // Обработка текстовых сообщений для диалогов
-    bot.on('message:text', async (ctx) => {
+    bot.on('message:text', async (ctx, next) => {
         const chatId = getChatId(ctx);
         const text = ctx.message.text;
         
         // Игнорируем команды - они обрабатываются отдельными хендлерами
-        if (text.startsWith('/')) return;
+        if (text.startsWith('/')) {
+            await next(); // Передаём управление дальше для обработки команд
+            return;
+        }
         
         const state = getConversationState(chatId);
         
@@ -750,23 +797,6 @@ export function createBot() {
         const pollAnswer = ctx.update.poll_answer;
         if (!pollAnswer.user) return;
         await handlePollAnswer(pollAnswer as { poll_id: string; user: { id: number }; option_ids: number[] });
-    });
-
-    // Команда сброса всех данных чата
-    bot.command('reset', async (ctx) => {
-        await ctx.reply('⚠️ Вы уверены? Это удалит все данные чата: источник, игры, настройки, опросы. Для подтверждения отправьте: /reset_confirm');
-    });
-
-    bot.command('reset_confirm', async (ctx) => {
-        const chatId = getChatId(ctx);
-        try {
-            await resetChatData(chatId);
-            await updateChatCommands(bot, chatId, false);
-            await ctx.reply('✅ Все данные чата удалены. Для начала работы выберите город с помощью /select_city или используйте /set_source для ручной установки ссылки.');
-        } catch (e) {
-            log.error('Reset error:', e);
-            await ctx.reply('Ошибка при сбросе данных. См. логи.');
-        }
     });
 
     bot.catch((e) => log.error('[ERROR] Bot error:', e));
