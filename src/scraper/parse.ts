@@ -1,21 +1,16 @@
 import * as cheerio from 'cheerio';
-
-import { log } from '../utils/logger.js';
-import type { RawGame } from '../types.js';
+import { RawGame } from '../types.js';
 
 export function parseQuizPlease(html: string, baseUrl: string): RawGame[] {
     const $ = cheerio.load(html);
     const items: RawGame[] = [];
-    
-    const scheduleColumns = $('.schedule-column');
-    log.info(`[Parser] Found ${scheduleColumns.length} .schedule-column elements`);
 
     const toAbs = (href: string | undefined) => {
         if (!href) return baseUrl;
         return href.startsWith('http') ? href : new URL(href, baseUrl).toString();
     };
 
-    scheduleColumns.each((_, col) => {
+    $('.schedule-column').each((_, col) => {
         const idAttr = $(col).attr('id');
         const block = $(col).find('.schedule-block').first();
 
@@ -27,7 +22,7 @@ export function parseQuizPlease(html: string, baseUrl: string): RawGame[] {
 
         // gameType: либо в квадратных скобках, либо «Квиз, плиз!»
         let gameType = titleLeft.trim();
-        const bracket = gameType.match(/\[.+?].*/);
+        const bracket = gameType.match(/\[.+?\].*/);
         if (bracket) gameType = bracket[0].trim();
 
         const dateLine = block.find('.block-date-with-language-game').first().text().trim();
@@ -78,6 +73,5 @@ export function parseQuizPlease(html: string, baseUrl: string): RawGame[] {
         }
     });
 
-    log.info(`[Parser] Parsed ${items.length} games from HTML (${html.length} chars)`);
     return items;
 }

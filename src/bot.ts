@@ -7,8 +7,13 @@ import { CB } from './bot/constants.js';
 import { resolveButtonId } from './bot/ui/buttonMapping.js';
 import {
     buildCitySelectionKeyboard,
+    buildGameTypesMenuKeyboard,
     buildPlayedKeyboard,
     buildPollsByDateKeyboard,
+    buildPollsByPackageKeyboard,
+    buildPollsByTypesKeyboard,
+    buildPollsMainMenuKeyboard,
+    buildRestoreTypesKeyboard,
     buildTypesKeyboard,
     moreKeyboard,
 } from './bot/ui/keyboards.js';
@@ -42,6 +47,7 @@ import { formatGameDateTime } from './utils/dateFormatter.js';
 import { log } from './utils/logger.js';
 import { parseDate, formatDateForDisplay, validateDateRange } from './utils/dateParser.js';
 import { setConversationState, getConversationState, clearConversationState } from './utils/conversationState.js';
+import { toggleSelectedType, getSelectedTypes, clearSelectedTypes } from './utils/selectedTypes.js';
 import type { DbGame, DbGameGroup } from './types.js';
 
 function getChatId(ctx: Context): string {
@@ -103,14 +109,11 @@ async function updateChatCommands(bot: Bot, chatId: string, hasSource: boolean) 
         { command: 'help', description: 'Список команд' },
         { command: 'select_city', description: 'Выбрать город' },
         { command: 'set_source', description: 'Установить ссылку на расписание вручную' },
-        { command: 'gamepacks', description: 'Показать пакеты игр' },
+        { command: 'game_packs_management', description: 'Пакеты и типы игр' },
         { command: 'upcoming', description: 'Будущие игры (по пакетам)' },
         { command: 'upcoming_by_dates', description: 'Будущие игры (по датам)' },
-        { command: 'poll', description: 'Создать опрос' },
-        { command: 'polls_by_date', description: 'Опросы по периодам' },
-        { command: 'remove_game_types', description: 'Исключить типы пакетов' },
-        { command: 'played', description: 'Отметить сыгранные' },
-        { command: 'unplayed', description: 'Снять отметку' },
+        { command: 'polls', description: 'Создать опросы' },
+        { command: 'played', description: 'Управление статусом игр' },
         { command: 'reset', description: 'Очистить данные' },
     ];
     const withSync = hasSource ? [{ command: 'sync', description: 'Синхронизировать игры из расписания' }, ...base] : base;
@@ -119,23 +122,6 @@ async function updateChatCommands(bot: Bot, chatId: string, hasSource: boolean) 
 
 export function createBot() {
     const bot = new Bot(config.token);
-
-    // Log all incoming updates for debugging
-    bot.use(async (ctx, next) => {
-        log.info('[Update received]', JSON.stringify({
-            update_id: ctx.update.update_id,
-            type: Object.keys(ctx.update).filter(k => k !== 'update_id')[0],
-            chat_id: ctx.chat?.id,
-            text: 'message' in ctx.update ? ctx.update.message?.text : undefined
-        }));
-        try {
-            await next();
-            log.info('[Update processed successfully]');
-        } catch (err) {
-            log.error('[Update processing error]', err);
-            throw err;
-        }
-    });
 
     bot.command('start', async (ctx) => {
         const chatId = getChatId(ctx);
@@ -163,54 +149,12 @@ export function createBot() {
             '/sync — обновить данные игр из источника (дополняет существующие, удаляет прошедшие).',
             '/upcoming [N] — показать будущих N игр, сгруппировано по пакетам (по умолчанию 15).',
             '/upcoming_by_dates [N] — показать будущих N игр, отсортировано по дате (по умолчанию 15).',
-            '/gamepacks — показать список пакетов (игр) с количеством доступных дат.',
-            '/poll [N|all] — создать опрос (по номеру N из /gamepacks, all для всех, без параметра = all).',
-            '/polls_by_date — создать опросы по играм, сгруппированным по дате (неделя/2 недели/месяц/свой период).',
-            '/remove_game_types — открыть клавиатуру для исключения типов пакетов из обработки.',
-            '/played [key,...|list] — отметить как сыгранные (список ключей, list для просмотра, без параметра = клавиатура).',
-            '/unplayed [key,...|list] — снять отметку «сыграно».',
+            '/game_packs_management — список пакетов и управление типами игр.',
+            '/polls — создать опросы (меню: по типам / по датам / по пакету / для всех).',
+            '/played — управление статусом игр.',
             '/cancel — отменить текущий диалог (например, ввод дат).',
             '/reset — полностью очистить все данные этого чата (источник, игры, настройки).'
         ].join('\n'));
-    });
-
-    bot.command('cancel', async (ctx) => {
-        const chatId = getChatId(ctx);
-        const state = getConversationState(chatId);
-        
-        if (state) {
-            clearConversationState(chatId);
-            await ctx.reply('❌ Диалог отменён.');
-        } else {
-            await ctx.reply('Нет активного диалога для отмены.');
-        }
-    });
-
-    // Команда сброса всех данных чата
-    bot.command('reset', async (ctx) => {
-        const chatId = getChatId(ctx);
-        log.info(`[Chat ${chatId}] /reset command handler triggered`);
-        try {
-            await ctx.reply('⚠️ Вы уверены? Это удалит все данные чата: источник, игры, настройки, опросы. Для подтверждения отправьте: /reset_confirm');
-            log.info(`[Chat ${chatId}] /reset reply sent successfully`);
-        } catch (err) {
-            log.error(`[Chat ${chatId}] /reset reply failed:`, err);
-            throw err;
-        }
-    });
-
-    bot.command('reset_confirm', async (ctx) => {
-        const chatId = getChatId(ctx);
-        log.info(`[Chat ${chatId}] /reset_confirm command handler triggered`);
-        try {
-            await resetChatData(chatId);
-            await updateChatCommands(bot, chatId, false);
-            await ctx.reply('✅ Все данные чата удалены. Для начала работы выберите город с помощью /select_city или используйте /set_source для ручной установки ссылки.');
-            log.info(`[Chat ${chatId}] Reset completed successfully`);
-        } catch (e) {
-            log.error('Reset error:', e);
-            await ctx.reply('Ошибка при сбросе данных. См. логи.');
-        }
     });
 
     // Инфо-уведомление сразу, чтобы не казалось, что «зависло»
@@ -420,161 +364,118 @@ export function createBot() {
         }
     });
 
-    // Показ пакетов игр списком без кнопок
-    bot.command('gamepacks', async (ctx) => {
-        const rows = await getUpcomingGroups(getChatId(ctx));
-        if (!rows.length) return ctx.reply('Пакетов игр не найдено.');
-
-        // Краткий список
-        let msg = rows.map((r, i) => {
-            const name = r.type_name;
-            const n = r.num || '?';
-            let icons = '';
-            if (r.played) icons += '✅ ';
-            if (r.polled_by_package) icons += '🗳 ';
-            if (r.polled_by_date) icons += '📅 ';
-            return `${i + 1}. ${icons}${name} #${n} — дат: ${r.cnt}`;
-        }).join('\n');
-
-        // Добавляем легенду
-        msg += '\n\n📖 Легенда:\n';
-        msg += '✅ — сыграно\n';
-        msg += '🗳 — опрос по пакету создан\n';
-        msg += '📅 — игра из пакета участвует в опросе по дате';
-
-        await ctx.reply(msg);
+    // Управление пакетами игр и типами
+    bot.command('game_packs_management', async (ctx) => {
+        const kb = buildGameTypesMenuKeyboard();
+        await ctx.reply(
+            '📦 Управление пакетами игр\n\n' +
+            'Выберите действие:\n\n' +
+            '📦 Показать пакеты — список всех пакетов игр с их статусом\n' +
+            '🚫 Исключить типы — скрыть определённые типы игр из обработки\n' +
+            '♻️ Восстановить типы — вернуть исключённые типы\n' +
+            '📋 Список исключённых — показать, какие типы скрыты',
+            { reply_markup: kb }
+        );
     });
 
     // Пометить пакет(ы) как сыгранные: текстовый режим, клавиатура, список
+    // Управление отметкой «сыграно» с клавиатурой-переключателем
     bot.command('played', async (ctx) => {
         const arg = (ctx.match as string | undefined)?.trim() || '';
-        if (!arg) {
-            const rows = await getUpcomingGroups(getChatId(ctx));
-            if (!rows.length) return ctx.reply('Пакетов игр не найдено.');
-            const kb = buildPlayedKeyboard(rows);
-            return ctx.reply('Отметить пакеты как сыгранные/несыгранные:', { reply_markup: kb });
-        }
-
-        if (arg.toLowerCase() === 'list') {
-            const rows = await getUpcomingGroups(getChatId(ctx));
-            const played = rows.filter((r) => r.played);
-            if (!played.length) return ctx.reply('Сыгранных пакетов нет.');
-            const msg = played.map((r) => `${r.type_name} #${r.num}`).join('\n');
-            return ctx.reply(msg);
-        }
-
-        const keys = arg
-            .split(/[\s,]+/)
-            .map(s => s.trim())
-            .filter(Boolean);
-
-        if (!keys.length) return ctx.reply('Не распознаны ключи групп. Пример: /played КвизПлиз#123');
-
-        let ok = 0;
-        for (const k of keys) {
-            try { await markGroupPlayed(getChatId(ctx), k); ok++; } catch (e) { log.error('played error for', k, e); }
-        }
-        await ctx.reply(`Готово. Отмечено как сыгранные: ${ok}/${keys.length}.`);
-    });
-
-    // Снять пометку «сыграно»: текстовый режим, клавиатура, список
-    bot.command('unplayed', async (ctx) => {
-        const arg = (ctx.match as string | undefined)?.trim() || '';
-        if (!arg) {
-            const rows = await getUpcomingGroups(getChatId(ctx));
-            if (!rows.length) return ctx.reply('Пакетов игр не найдено.');
-            const kb = buildPlayedKeyboard(rows);
-            return ctx.reply('Отметить пакеты как сыгранные/несыгранные:', { reply_markup: kb });
-        }
-
-        if (arg.toLowerCase() === 'list') {
-            const rows = await getUpcomingGroups(getChatId(ctx));
-            const unplayed = rows.filter((r) => !r.played);
-            if (!unplayed.length) return ctx.reply('Несыгранных пакетов нет.');
-            const msg = unplayed.map((r) => `${r.type_name} #${r.num}`).join('\n');
-            return ctx.reply(msg);
-        }
-
-        const keys = arg
-            .split(/[\s,]+/)
-            .map(s => s.trim())
-            .filter(Boolean);
-
-        if (!keys.length) return ctx.reply('Не распознаны ключи групп. Пример: /unplayed КвизПлиз#123');
-
-        let ok = 0;
-        for (const k of keys) {
-            try { await unmarkGroupPlayed(getChatId(ctx), k); ok++; } catch (e) { log.error('unplayed error for', k, e); }
-        }
-        await ctx.reply(`Готово. Снята пометка «сыграно» для: ${ok}/${keys.length}.`);
-    });
-
-    // Сформировать опрос: по номеру или для всех сразу
-    bot.command('poll', async (ctx) => {
-        const arg = (ctx.match as string | undefined)?.trim();
         const chatId = getChatId(ctx);
+        
+        // Без аргумента - показать клавиатуру
+        if (!arg) {
+            const rows = await getUpcomingGroups(chatId);
+            if (!rows.length) return ctx.reply('Пакетов игр не найдено.');
+            const kb = buildPlayedKeyboard(rows);
+            return ctx.reply(
+                '🎮 Управление статусом игр\n\n' +
+                'Нажмите на пакет, чтобы переключить статус:\n' +
+                '✅ — сыграно\n' +
+                '◻️ — не сыграно',
+                { reply_markup: kb }
+            );
+        }
 
-        const rows = await getUpcomingGroups(chatId);
-        const games = await getFilteredUpcoming(chatId);
-
-        const createForRow = async (row: DbGameGroup, requireMultipleDates = true): Promise<boolean> => {
-            const items = games.filter((g) => g.group_key === row.group_key);
-            if (requireMultipleDates && items.length < 2) return false;
-            if (!items.length) return false;
-            const group = { groupKey: row.group_key, name: row.type_name, number: row.num, items };
-            const msg = await postGroupPoll(bot, chatId, group);
-            return Boolean(msg);
-        };
-
-        // Без аргумента или "all" - создать для всех
-        if (!arg || arg.toLowerCase() === 'all') {
-            await ctx.reply('Будут созданы опросы по пакетам игр, где дат два и более, и для которых опросы ещё не публиковались.');
-            let created = 0;
-            for (const row of rows) {
-                if (row.polled_by_package) continue; // Пропускаем только те, для которых опрос уже создан по пакету
-                const ok = await createForRow(row);
-                if (ok) created++;
+        // "list" - показать списком
+        if (arg.toLowerCase() === 'list') {
+            const rows = await getUpcomingGroups(chatId);
+            const played = rows.filter((r) => r.played);
+            const unplayed = rows.filter((r) => !r.played);
+            
+            let msg = '';
+            if (played.length > 0) {
+                msg += '✅ Сыграно:\n' + played.map((r) => `  ${r.type_name} #${r.num}`).join('\n');
             }
-            return ctx.reply(created ? `✅ Опросов создано: ${created}` : 'Нет пакетов (игр) для создания опросов.');
+            if (unplayed.length > 0) {
+                if (msg) msg += '\n\n';
+                msg += '◻️ Не сыграно:\n' + unplayed.map((r) => `  ${r.type_name} #${r.num}`).join('\n');
+            }
+            
+            if (!msg) msg = 'Пакетов игр не найдено.';
+            return ctx.reply(msg);
         }
 
-        // По номеру - создать даже для одной даты
-        const idx = Number(arg);
-        if (!Number.isFinite(idx) || idx < 1) return ctx.reply('Инструкция по использованию команды: /poll [номер|all]');
-        const row = rows[idx - 1];
-        if (!row) return ctx.reply('Группа с таким номером не найдена.');
+        // Текстовый режим - список ключей для пометки
+        const keys = arg
+            .split(/[\s,]+/)
+            .map(s => s.trim())
+            .filter(Boolean);
+
+        if (!keys.length) {
+            return ctx.reply(
+                'Использование команды:\n' +
+                '/played — показать клавиатуру\n' +
+                '/played list — показать списком\n' +
+                '/played КвизПлиз#123 — отметить как сыграно\n' +
+                '/played КвизПлиз#123,Караоке#2 — несколько пакетов'
+            );
+        }
+
+        let marked = 0;
+        for (const k of keys) {
+            try { 
+                await markGroupPlayed(chatId, k); 
+                marked++; 
+            } catch (e) { 
+                log.error('played error for', k, e); 
+            }
+        }
+        await ctx.reply(`✅ Отмечено как сыгранные: ${marked}/${keys.length}.`);
+    });
+
+    // Единая команда для создания опросов с меню выбора
+    bot.command('polls', async (ctx) => {
+        const chatId = getChatId(ctx);
+        const rows = await getUpcomingGroups(chatId);
         
-        const items = games.filter((g) => g.group_key === row.group_key);
-        if (!items.length) {
-            return ctx.reply(`❌ Для группы "${row.type_name} #${row.num}" не найдено дат.`);
+        if (!rows.length) {
+            return ctx.reply('Пакеты (игры) не обнаружены. Сначала синхронизируйте данные с помощью /sync.');
         }
         
-        const ok = await createForRow(row, false);
-        await ctx.reply(ok ? '✅ Опрос опубликован.' : '❌ Ошибка при создании опроса.');
-    });
-
-    // Управление типами
-    bot.command('remove_game_types', async (ctx) => {
-        const rows = await getUpcomingGroups(getChatId(ctx));
-        const allTypes = Array.from(new Set(rows.map((r) => String(r.type_name))));
-        const excluded = new Set(await listExcludedTypes(getChatId(ctx)));
-
-        if (!allTypes.length) return ctx.reply('Пакеты (игры) не обнаружены.');
-
-        const kb = buildTypesKeyboard(allTypes, excluded);
-        await ctx.reply('Управление типами игр (нажатие исключает/возвращает тип):', { reply_markup: kb });
-    });
-
-    // Создание опросов по датам (не по пакетам)
-    bot.command('polls_by_date', async (ctx) => {
-        const kb = buildPollsByDateKeyboard();
+        const kb = buildPollsMainMenuKeyboard();
         await ctx.reply(
-            'Создание опросов по играм, сгруппированным по периоду времени.\n\n' +
-            'Будут созданы опросы, где каждый опрос охватывает игры в указанном периоде. ' +
-            'Название опроса — период времени. Варианты ответа — отдельные игры с датами и местами.\n\n' +
-            'Выберите период:',
+            '📊 Создание опросов\n\n' +
+            'Выберите способ создания опросов:\n\n' +
+            '🎯 По типам игр — выбрать конкретные типы, все игры будут отсортированы по дате\n' +
+            '📅 По датам — сгруппировать по периодам времени\n' +
+            '📦 По номеру пакета — создать для одного пакета\n' +
+            '🌐 Для всех пакетов — создать для всех (где 2+ дат)',
             { reply_markup: kb }
         );
+    });
+
+    bot.command('cancel', async (ctx) => {
+        const chatId = getChatId(ctx);
+        const state = getConversationState(chatId);
+        
+        if (state) {
+            clearConversationState(chatId);
+            await ctx.reply('❌ Диалог отменён.');
+        } else {
+            await ctx.reply('Нет активного диалога для отмены.');
+        }
     });
 
     // Коллбэки
@@ -582,11 +483,235 @@ export function createBot() {
         const data = ctx.callbackQuery.data!;
         const chatId = getChatId(ctx);
         try {
-            if (data.startsWith(CB.POLLS_BY_DATE)) {
+            // Game types menu options
+            if (data === CB.TYPES_MENU_EXCLUDE) {
+                const rows = await getUpcomingGroups(chatId);
+                const allTypes = Array.from(new Set(rows.map((r) => String(r.type_name))));
+                const excluded = new Set(await listExcludedTypes(chatId));
+
+                if (!allTypes.length) {
+                    return await ctx.answerCallbackQuery({ text: 'Пакеты (игры) не обнаружены', show_alert: true });
+                }
+
+                const kb = buildTypesKeyboard(allTypes, excluded);
+                await ctx.editMessageText(
+                    '🚫 Исключение типов игр\n\n' +
+                    'Нажмите на тип, чтобы исключить/восстановить его:\n' +
+                    '🚫 — активный (будет исключён при нажатии)\n' +
+                    '♻️ — исключён (будет восстановлен при нажатии)',
+                    { reply_markup: kb }
+                );
+                await ctx.answerCallbackQuery();
+            } else if (data === CB.TYPES_MENU_RESTORE) {
+                const excluded = await listExcludedTypes(chatId);
+                
+                if (!excluded.length) {
+                    return await ctx.answerCallbackQuery({ text: 'Нет исключённых типов', show_alert: true });
+                }
+                
+                const kb = buildRestoreTypesKeyboard(excluded);
+                await ctx.editMessageText(
+                    '♻️ Восстановление типов игр\n\n' +
+                    'Нажмите на тип, чтобы восстановить его:',
+                    { reply_markup: kb }
+                );
+                await ctx.answerCallbackQuery();
+            } else if (data === CB.TYPES_MENU_SHOW_LIST) {
+                const excluded = await listExcludedTypes(chatId);
+                
+                if (!excluded.length) {
+                    await ctx.editMessageText('📋 Список исключённых типов\n\n✅ Нет исключённых типов. Все типы игр активны.');
+                } else {
+                    const msg = '📋 Список исключённых типов\n\n🚫 Исключено:\n' + 
+                                excluded.map((type, i) => `${i + 1}. ${type}`).join('\n');
+                    await ctx.editMessageText(msg);
+                }
+                await ctx.answerCallbackQuery();
+            } else if (data === CB.TYPES_MENU_SHOW_PACKS) {
+                const rows = await getUpcomingGroups(chatId);
+                
+                if (!rows.length) {
+                    await ctx.editMessageText('📦 Пакеты игр\n\nПакетов игр не найдено.');
+                    await ctx.answerCallbackQuery();
+                    return;
+                }
+                
+                let msg = '📦 Пакеты игр\n\n';
+                msg += rows.map((r, i) => {
+                    const name = r.type_name;
+                    const n = r.num || '?';
+                    let icons = '';
+                    if (r.played) icons += '✅ ';
+                    if (r.polled_by_package) icons += '🗳 ';
+                    if (r.polled_by_date) icons += '📅 ';
+                    return `${i + 1}. ${icons}${name} #${n} — дат: ${r.cnt}`;
+                }).join('\n');
+                
+                msg += '\n\n📖 Легенда:\n';
+                msg += '✅ — сыграно\n';
+                msg += '🗳 — опрос по пакету создан\n';
+                msg += '📅 — игра из пакета участвует в опросе по дате';
+                
+                await ctx.editMessageText(msg);
+                await ctx.answerCallbackQuery();
+            } else if (data.startsWith(CB.TYPE_RESTORE)) {
+                const buttonId = data.slice(CB.TYPE_RESTORE.length);
+                const type = resolveButtonId(buttonId);
+                if (!type) return await ctx.answerCallbackQuery({ text: 'Ошибка: кнопка устарела' });
+                
+                await unexcludeType(chatId, type);
+                const excluded = await listExcludedTypes(chatId);
+                
+                if (excluded.length > 0) {
+                    const kb = buildRestoreTypesKeyboard(excluded);
+                    await ctx.editMessageReplyMarkup({ reply_markup: kb });
+                    await ctx.answerCallbackQuery({ text: `✅ Тип «${type}» восстановлен` });
+                } else {
+                    await ctx.editMessageText('✅ Все типы игр восстановлены!');
+                    await ctx.answerCallbackQuery({ text: `✅ Тип «${type}» восстановлен` });
+                }
+            } else if (data === CB.POLLS_MENU_BY_TYPES) {
+                const rows = await getUpcomingGroups(chatId);
+                const allTypes = Array.from(new Set(rows.map((r) => String(r.type_name))));
+                
+                if (!allTypes.length) {
+                    return await ctx.answerCallbackQuery({ text: 'Пакеты не найдены', show_alert: true });
+                }
+                
+                clearSelectedTypes(chatId);
+                const kb = buildPollsByTypesKeyboard(allTypes, new Set());
+                await ctx.editMessageText(
+                    'Выберите типы игр для создания опросов.\n\n' +
+                    'Будут созданы опросы со всеми играми выбранных типов, отсортированными по дате.\n\n' +
+                    'Нажмите на типы для выбора, затем нажмите "Создать опросы":',
+                    { reply_markup: kb }
+                );
+                await ctx.answerCallbackQuery();
+            } else if (data === CB.POLLS_MENU_BY_DATE) {
+                const kb = buildPollsByDateKeyboard();
+                await ctx.editMessageText(
+                    'Создание опросов по играм, сгруппированным по периоду времени.\n\n' +
+                    'Будут созданы опросы, где каждый опрос охватывает игры в указанном периоде.\n\n' +
+                    'Выберите период:',
+                    { reply_markup: kb }
+                );
+                await ctx.answerCallbackQuery();
+            } else if (data === CB.POLLS_MENU_BY_PACKAGE) {
+                const rows = await getUpcomingGroups(chatId);
+                if (!rows.length) {
+                    return await ctx.answerCallbackQuery({ text: 'Пакеты не найдены', show_alert: true });
+                }
+                
+                const packages = rows.map((r, i) => ({
+                    index: i + 1,
+                    name: r.type_name,
+                    num: r.num,
+                    count: r.cnt,
+                }));
+                
+                const kb = buildPollsByPackageKeyboard(packages);
+                await ctx.editMessageText(
+                    '📦 Выберите пакет для создания опроса:\n\n' +
+                    'Нажмите на пакет, чтобы создать опрос для всех его дат.',
+                    { reply_markup: kb }
+                );
+                await ctx.answerCallbackQuery();
+            } else if (data === CB.POLLS_MENU_ALL) {
+                await ctx.answerCallbackQuery({ text: 'Создаю опросы...' });
+                await ctx.editMessageText('🔄 Создание опросов для всех пакетов...');
+                
+                const rows = await getUpcomingGroups(chatId);
+                const games = await getFilteredUpcoming(chatId);
+                
+                let created = 0;
+                for (const row of rows) {
+                    if (row.polled_by_package) continue;
+                    const items = games.filter((g) => g.group_key === row.group_key);
+                    if (items.length < 2) continue;
+                    const group = { groupKey: row.group_key, name: row.type_name, number: row.num, items };
+                    const msg = await postGroupPoll(bot, chatId, group);
+                    if (msg) created++;
+                }
+                
+                await ctx.reply(created ? `✅ Опросов создано: ${created}` : 'Нет пакетов (игр) для создания опросов.');
+            } else if (data.startsWith(CB.POLLS_BY_PACKAGE)) {
+                const idxStr = data.slice(CB.POLLS_BY_PACKAGE.length);
+                const idx = parseInt(idxStr, 10);
+                
+                const rows = await getUpcomingGroups(chatId);
+                const row = rows[idx - 1];
+                
+                if (!row) {
+                    return await ctx.answerCallbackQuery({ text: 'Пакет не найден', show_alert: true });
+                }
+                
+                const games = await getFilteredUpcoming(chatId);
+                const items = games.filter((g) => g.group_key === row.group_key);
+                
+                if (!items.length) {
+                    return await ctx.answerCallbackQuery({ text: `Нет дат для "${row.type_name} #${row.num}"`, show_alert: true });
+                }
+                
+                await ctx.answerCallbackQuery({ text: 'Создаю опрос...' });
+                const group = { groupKey: row.group_key, name: row.type_name, number: row.num, items };
+                const msg = await postGroupPoll(bot, chatId, group);
+                
+                if (msg) {
+                    await ctx.reply(`✅ Опрос создан для "${row.type_name} #${row.num}"`);
+                } else {
+                    await ctx.reply('❌ Ошибка при создании опроса.');
+                }
+            } else if (data.startsWith(CB.POLLS_BY_TYPE_TOGGLE)) {
+                const buttonId = data.slice(CB.POLLS_BY_TYPE_TOGGLE.length);
+                const type = resolveButtonId(buttonId);
+                if (!type) return await ctx.answerCallbackQuery({ text: 'Ошибка: кнопка устарела' });
+                
+                toggleSelectedType(chatId, type);
+                const selectedTypes = getSelectedTypes(chatId);
+                
+                const rows = await getUpcomingGroups(chatId);
+                const allTypes = Array.from(new Set(rows.map((r) => String(r.type_name))));
+                const kb = buildPollsByTypesKeyboard(allTypes, selectedTypes);
+                
+                await ctx.editMessageReplyMarkup({ reply_markup: kb });
+                await ctx.answerCallbackQuery({ text: selectedTypes.has(type) ? `✅ ${type}` : `❌ ${type}` });
+            } else if (data === CB.POLLS_BY_TYPE_CREATE) {
+                const selectedTypes = getSelectedTypes(chatId);
+                if (selectedTypes.size === 0) {
+                    return await ctx.answerCallbackQuery({ text: 'Не выбрано ни одного типа', show_alert: true });
+                }
+                
+                await ctx.answerCallbackQuery({ text: 'Создаю опросы...' });
+                await ctx.reply(`🔄 Создаю опросы для ${selectedTypes.size} типов игр...`);
+                
+                const games = await getFilteredUpcoming(chatId);
+                
+                // Filter games by selected types and sort by date
+                const filteredGames = games.filter(g => {
+                    // Extract type name from group_key or title
+                    const gameType = g.title.split('#')[0].trim();
+                    return selectedTypes.has(gameType) || Array.from(selectedTypes).some(t => g.title.includes(t));
+                });
+                
+                const sortedGames = filteredGames.sort((a, b) => 
+                    new Date(a.date_time).getTime() - new Date(b.date_time).getTime()
+                );
+                
+                if (sortedGames.length === 0) {
+                    clearSelectedTypes(chatId);
+                    return await ctx.reply('Нет игр выбранных типов.');
+                }
+                
+                // Create date-range polls with the filtered games
+                const created = await createPollsByDatePeriod(bot, chatId, sortedGames, 30);
+                
+                clearSelectedTypes(chatId);
+                await ctx.reply(created ? `✅ Опросов создано: ${created}` : 'Нет подходящих игр для создания опросов.');
+            } else if (data.startsWith(CB.POLLS_BY_DATE)) {
                 const period = data.slice(CB.POLLS_BY_DATE.length);
                 
                 if (period === 'custom') {
-                    // Начинаем диалог для ввода дат
+                    // Start dialog for custom date input
                     log.info(`[Conversation] Starting custom date dialog for chat ${chatId}`);
                     setConversationState(chatId, 'waiting_start_date');
                     await ctx.answerCallbackQuery({ text: 'Введите даты' });
@@ -696,26 +821,31 @@ export function createBot() {
         }
     });
 
-    // Обработка текстовых сообщений для диалогов
+    bot.on('poll_answer', async (ctx) => {
+        const pollAnswer = ctx.update.poll_answer;
+        if (!pollAnswer.user) return;
+        await handlePollAnswer(pollAnswer as { poll_id: string; user: { id: number }; option_ids: number[] });
+    });
+
+    // Handle text messages for custom date dialog
     bot.on('message:text', async (ctx, next) => {
         const chatId = getChatId(ctx);
         const text = ctx.message.text;
         
-        // Игнорируем команды - они обрабатываются отдельными хендлерами
+        // Pass commands to command handlers
         if (text.startsWith('/')) {
-            await next(); // Передаём управление дальше для обработки команд
+            await next();
             return;
         }
         
         const state = getConversationState(chatId);
         
-        if (!state) return; // Если нет активного диалога, пропускаем
+        if (!state) return; // No active dialog
         
-        // В группах проверяем, что это либо reply к боту, либо бот может читать все сообщения
+        // In groups, check if this is a reply to bot
         if (ctx.chat?.type !== 'private') {
             const isReplyToBot = ctx.message.reply_to_message?.from?.id === ctx.me.id;
             if (!isReplyToBot) {
-                // В группе без reply - молча игнорируем
                 return;
             }
         }
@@ -731,7 +861,7 @@ export function createBot() {
                     return;
                 }
                 
-                // Проверяем, что дата не в прошлом
+                // Check that date is not in the past
                 const now = new Date();
                 now.setHours(0, 0, 0, 0);
                 if (startDate < now) {
@@ -740,7 +870,7 @@ export function createBot() {
                     return;
                 }
                 
-                // Сохраняем дату начала и просим ввести дату окончания
+                // Save start date and ask for end date
                 log.info(`[Conversation] Start date accepted: ${formatDateForDisplay(startDate)}`);
                 setConversationState(chatId, 'waiting_end_date', { startDate: startDate.toISOString() });
                 
@@ -763,14 +893,14 @@ export function createBot() {
                 
                 const startDate = new Date(state.data.startDate);
                 
-                // Проверяем, что дата окончания после даты начала
+                // Check that end date is after start date
                 if (!validateDateRange(startDate, endDate)) {
                     log.warn(`[Conversation] End date ${formatDateForDisplay(endDate)} is not after start date ${formatDateForDisplay(startDate)}`);
                     await ctx.reply(`❌ Дата окончания должна быть позже даты начала (${formatDateForDisplay(startDate)}). Попробуйте снова или отправьте /cancel для отмены.`);
                     return;
                 }
                 
-                // Создаём опросы
+                // Create polls
                 log.info(`[Conversation] Creating polls for date range: ${formatDateForDisplay(startDate)} - ${formatDateForDisplay(endDate)}`);
                 clearConversationState(chatId);
                 
@@ -793,10 +923,21 @@ export function createBot() {
         }
     });
 
-    bot.on('poll_answer', async (ctx) => {
-        const pollAnswer = ctx.update.poll_answer;
-        if (!pollAnswer.user) return;
-        await handlePollAnswer(pollAnswer as { poll_id: string; user: { id: number }; option_ids: number[] });
+    // Команда сброса всех данных чата
+    bot.command('reset', async (ctx) => {
+        await ctx.reply('⚠️ Вы уверены? Это удалит все данные чата: источник, игры, настройки, опросы. Для подтверждения отправьте: /reset_confirm');
+    });
+
+    bot.command('reset_confirm', async (ctx) => {
+        const chatId = getChatId(ctx);
+        try {
+            await resetChatData(chatId);
+            await updateChatCommands(bot, chatId, false);
+            await ctx.reply('✅ Все данные чата удалены. Для начала работы выберите город с помощью /select_city или используйте /set_source для ручной установки ссылки.');
+        } catch (e) {
+            log.error('Reset error:', e);
+            await ctx.reply('Ошибка при сбросе данных. См. логи.');
+        }
     });
 
     bot.catch((e) => log.error('[ERROR] Bot error:', e));

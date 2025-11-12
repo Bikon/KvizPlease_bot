@@ -4,11 +4,22 @@ export const CB = {
     GROUP_UNEXCLUDE: 'gu:',
     TYPE_EXCLUDE: 'te:',
     TYPE_UNEXCLUDE: 'tu:',
+    TYPE_RESTORE: 'tr:',
     PLAYED_MARK: 'pm:',
     PLAYED_UNMARK: 'pu:',
     CITY_SELECT: 'city:',
+    POLLS_MENU_BY_TYPES: 'polls_menu_types',
+    POLLS_MENU_BY_DATE: 'polls_menu_date',
+    POLLS_MENU_BY_PACKAGE: 'polls_menu_pkg',
+    POLLS_MENU_ALL: 'polls_menu_all',
     POLLS_BY_DATE: 'pbd:',
+    POLLS_BY_TYPE_TOGGLE: 'pbt:',
+    POLLS_BY_TYPE_CREATE: 'pbc',
+    POLLS_BY_PACKAGE: 'pbp:',
+    TYPES_MENU_EXCLUDE: 'types_menu_exclude',
+    TYPES_MENU_RESTORE: 'types_menu_restore',
+    TYPES_MENU_SHOW_LIST: 'types_menu_list',
+    TYPES_MENU_SHOW_PACKS: 'types_menu_packs',
 } as const;
 
 export type CallbackPrefixes = typeof CB;
-

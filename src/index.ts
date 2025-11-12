@@ -21,20 +21,17 @@ const bot = createBot();
     { command: 'select_city', description: 'Выбрать город' },
     { command: 'set_source', description: 'Установить ссылку на расписание вручную' },
     { command: 'sync', description: 'Синхронизировать игры из расписания' },
-    { command: 'gamepacks', description: 'Показать пакеты/даты' },
+    { command: 'game_packs_management', description: 'Пакеты и типы игр' },
     { command: 'upcoming', description: 'Будущие игры (по пакетам)' },
     { command: 'upcoming_by_dates', description: 'Будущие игры (по датам)' },
-    { command: 'poll', description: 'Создать опрос (номер|all)' },
-    { command: 'polls_by_date', description: 'Опросы по периодам' },
-    { command: 'remove_game_types', description: 'Исключить типы пакетов' },
-    { command: 'played', description: 'Отметить как сыгранные' },
-    { command: 'unplayed', description: 'Снять отметку сыграно' },
+    { command: 'polls', description: 'Создать опросы' },
+    { command: 'played', description: 'Управление статусом игр' },
     { command: 'reset', description: 'Очистить все данные чата' },
   ]);
   
   setupScheduler(bot);
   
-  // Используем runner для параллельной обработки обновлений из разных чатов
+  // Use runner for concurrent update processing
   const runner = run(bot, {
     runner: {
       fetch: {
