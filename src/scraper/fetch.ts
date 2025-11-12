@@ -39,7 +39,12 @@ export async function grabPageHtmlWithFilters(url: string) {
     // В последних версиях puppeteer поле headless либо boolean, либо "shell".
     const browser = await puppeteer.launch({
         headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--ignore-certificate-errors',
+            '--ignore-certificate-errors-spki-list'
+        ],
     });
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 1400 });

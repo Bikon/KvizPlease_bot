@@ -55,9 +55,10 @@ export function buildCitySelectionKeyboard() {
 
 export function buildPollsByDateKeyboard() {
     const kb = new InlineKeyboard();
-    kb.text('📅 Неделя', CB.POLLS_BY_DATE + 'week');
-    kb.text('📅 2 недели', CB.POLLS_BY_DATE + '2weeks');
-    kb.text('📅 Месяц', CB.POLLS_BY_DATE + 'month');
+    kb.text('📅 Неделя', CB.POLLS_BY_DATE + 'week').row();
+    kb.text('📅 2 недели', CB.POLLS_BY_DATE + '2weeks').row();
+    kb.text('📅 Месяц', CB.POLLS_BY_DATE + 'month').row();
+    kb.text('📆 Свой период', CB.POLLS_BY_DATE + 'custom');
     return kb;
 }
 

@@ -34,11 +34,14 @@ import {
 } from './services/gameService.js';
 import {
     createPollsByDatePeriod,
+    createPollsByDateRange,
     handlePollAnswer,
     postGroupPoll,
 } from './services/pollService.js';
 import { formatGameDateTime } from './utils/dateFormatter.js';
 import { log } from './utils/logger.js';
+import { parseDate, formatDateForDisplay, validateDateRange } from './utils/dateParser.js';
+import { setConversationState, getConversationState, clearConversationState, updateConversationData } from './utils/conversationState.js';
 import type { DbGame, DbGameGroup } from './types.js';
 
 function getChatId(ctx: Context): string {
@@ -145,12 +148,25 @@ export function createBot() {
             '/upcoming_by_dates [N] — показать будущих N игр, отсортировано по дате (по умолчанию 15).',
             '/gamepacks — показать список пакетов (игр) с количеством доступных дат.',
             '/poll [N|all] — создать опрос (по номеру N из /gamepacks, all для всех, без параметра = all).',
-            '/polls_by_date — создать опросы по играм, сгруппированным по дате (неделя/2 недели/месяц).',
+            '/polls_by_date — создать опросы по играм, сгруппированным по дате (неделя/2 недели/месяц/свой период).',
             '/remove_game_types — открыть клавиатуру для исключения типов пакетов из обработки.',
             '/played [key,...|list] — отметить как сыгранные (список ключей, list для просмотра, без параметра = клавиатура).',
             '/unplayed [key,...|list] — снять отметку «сыграно».',
+            '/cancel — отменить текущий диалог (например, ввод дат).',
             '/reset — полностью очистить все данные этого чата (источник, игры, настройки).'
         ].join('\n'));
+    });
+
+    bot.command('cancel', async (ctx) => {
+        const chatId = getChatId(ctx);
+        const state = getConversationState(chatId);
+        
+        if (state) {
+            clearConversationState(chatId);
+            await ctx.reply('❌ Диалог отменён.');
+        } else {
+            await ctx.reply('Нет активного диалога для отмены.');
+        }
     });
 
     // Инфо-уведомление сразу, чтобы не казалось, что «зависло»
@@ -524,6 +540,23 @@ export function createBot() {
         try {
             if (data.startsWith(CB.POLLS_BY_DATE)) {
                 const period = data.slice(CB.POLLS_BY_DATE.length);
+                
+                if (period === 'custom') {
+                    // Начинаем диалог для ввода дат
+                    log.info(`[Conversation] Starting custom date dialog for chat ${chatId}`);
+                    setConversationState(chatId, 'waiting_start_date');
+                    await ctx.answerCallbackQuery({ text: 'Введите даты' });
+                    await ctx.reply(
+                        '📆 Введите дату начала периода в формате:\n' +
+                        '• ДД.ММ.ГГГГ (например, 15.12.2024)\n' +
+                        '• ДД.ММ.ГГ (например, 15.12.24)\n' +
+                        '• ДД.ММ (например, 15.12 - будет использован текущий год)\n\n' +
+                        '⚠️ В групповом чате: ответьте (reply) на это сообщение с датой\n' +
+                        'или отправьте /cancel для отмены.'
+                    );
+                    return;
+                }
+                
                 let days = 7;
                 if (period === '2weeks') days = 14;
                 else if (period === 'month') days = 30;
@@ -616,6 +649,100 @@ export function createBot() {
         } catch (e) {
             log.error('Callback error:', e);
             await ctx.answerCallbackQuery({ text: 'Ошибка, см. логи', show_alert: true });
+        }
+    });
+
+    // Обработка текстовых сообщений для диалогов
+    bot.on('message:text', async (ctx) => {
+        const chatId = getChatId(ctx);
+        const text = ctx.message.text;
+        
+        // Игнорируем команды - они обрабатываются отдельными хендлерами
+        if (text.startsWith('/')) return;
+        
+        const state = getConversationState(chatId);
+        
+        if (!state) return; // Если нет активного диалога, пропускаем
+        
+        // В группах проверяем, что это либо reply к боту, либо бот может читать все сообщения
+        if (ctx.chat?.type !== 'private') {
+            const isReplyToBot = ctx.message.reply_to_message?.from?.id === ctx.me.id;
+            if (!isReplyToBot) {
+                // В группе без reply - молча игнорируем
+                return;
+            }
+        }
+        
+        try {
+            log.info(`[Conversation] Chat ${chatId} in step ${state.step}, received: ${text}`);
+            
+            if (state.step === 'waiting_start_date') {
+                const startDate = parseDate(text);
+                if (!startDate) {
+                    log.warn(`[Conversation] Failed to parse start date: ${text}`);
+                    await ctx.reply('❌ Неверный формат даты. Попробуйте снова или отправьте /cancel для отмены.');
+                    return;
+                }
+                
+                // Проверяем, что дата не в прошлом
+                const now = new Date();
+                now.setHours(0, 0, 0, 0);
+                if (startDate < now) {
+                    log.warn(`[Conversation] Start date is in the past: ${startDate}`);
+                    await ctx.reply('❌ Дата начала не может быть в прошлом. Попробуйте снова или отправьте /cancel для отмены.');
+                    return;
+                }
+                
+                // Сохраняем дату начала и просим ввести дату окончания
+                log.info(`[Conversation] Start date accepted: ${formatDateForDisplay(startDate)}`);
+                setConversationState(chatId, 'waiting_end_date', { startDate: startDate.toISOString() });
+                
+                await ctx.reply(
+                    `✅ Дата начала: ${formatDateForDisplay(startDate)}\n\n` +
+                    '📆 Теперь введите дату окончания периода в том же формате:\n' +
+                    '• ДД.ММ.ГГГГ (например, 31.12.2024)\n' +
+                    '• ДД.ММ.ГГ (например, 31.12.24)\n' +
+                    '• ДД.ММ (например, 31.12)\n\n' +
+                    '⚠️ В групповом чате: ответьте (reply) на это сообщение\n' +
+                    'или отправьте /cancel для отмены.'
+                );
+            } else if (state.step === 'waiting_end_date') {
+                const endDate = parseDate(text);
+                if (!endDate) {
+                    log.warn(`[Conversation] Failed to parse end date: ${text}`);
+                    await ctx.reply('❌ Неверный формат даты. Попробуйте снова или отправьте /cancel для отмены.');
+                    return;
+                }
+                
+                const startDate = new Date(state.data.startDate);
+                
+                // Проверяем, что дата окончания после даты начала
+                if (!validateDateRange(startDate, endDate)) {
+                    log.warn(`[Conversation] End date ${formatDateForDisplay(endDate)} is not after start date ${formatDateForDisplay(startDate)}`);
+                    await ctx.reply(`❌ Дата окончания должна быть позже даты начала (${formatDateForDisplay(startDate)}). Попробуйте снова или отправьте /cancel для отмены.`);
+                    return;
+                }
+                
+                // Создаём опросы
+                log.info(`[Conversation] Creating polls for date range: ${formatDateForDisplay(startDate)} - ${formatDateForDisplay(endDate)}`);
+                clearConversationState(chatId);
+                
+                await ctx.reply(`⏳ Создаю опросы для периода с ${formatDateForDisplay(startDate)} по ${formatDateForDisplay(endDate)}...`);
+                
+                const games = await getFilteredUpcoming(chatId);
+                const created = await createPollsByDateRange(bot, chatId, games, startDate, endDate);
+                
+                if (created > 0) {
+                    const pollWord = created === 1 ? 'опрос' : created < 5 ? 'опроса' : 'опросов';
+                    await ctx.reply(`✅ Создано ${created} ${pollWord} для игр с ${formatDateForDisplay(startDate)} по ${formatDateForDisplay(endDate)}.`);
+                } else {
+                    await ctx.reply('❌ Нет игр в выбранном периоде.');
+                }
+            }
+        } catch (e) {
+            log.error('[Conversation] Error:', e);
+            clearConversationState(chatId);
+            await ctx.reply('❌ Произошла ошибка. Диалог отменён.');
         }
     });
 

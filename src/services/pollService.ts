@@ -40,22 +40,19 @@ export async function postGroupPoll(bot: Bot, chatId: string | number, group: { 
 }
 
 export async function handlePollAnswer(pollAnswer: any) {
-    const pollId = pollAnswer.poll.id as string;
+    const pollId = pollAnswer.poll_id as string;
     const userId = pollAnswer.user.id as number;
     const optionIds = pollAnswer.option_ids as number[];
     await upsertVote(pollId, userId, optionIds);
 }
 
-export async function createPollsByDatePeriod(bot: Bot, chatId: string | number, games: any[], periodDays: number): Promise<number> {
+export async function createPollsByDateRange(bot: Bot, chatId: string | number, games: any[], startDate: Date, endDate: Date): Promise<number> {
     if (!games.length) return 0;
-    
-    const now = new Date();
-    const endDate = new Date(now.getTime() + periodDays * 24 * 60 * 60 * 1000);
     
     // Фильтруем игры в пределах периода
     const gamesInPeriod = games.filter(g => {
         const gameDate = new Date(g.date_time);
-        return gameDate >= now && gameDate <= endDate;
+        return gameDate >= startDate && gameDate <= endDate;
     });
     
     if (!gamesInPeriod.length) return 0;
@@ -81,8 +78,8 @@ export async function createPollsByDatePeriod(bot: Bot, chatId: string | number,
         const totalChunks = Math.ceil(sortedGames.length / chunkSize);
         const chunkNum = Math.floor(i / chunkSize) + 1;
         const periodTitle = totalChunks > 1 
-            ? `Игры с ${formatDate(now)} по ${formatDate(endDate)} (${chunkNum}/${totalChunks})`
-            : `Игры с ${formatDate(now)} по ${formatDate(endDate)}`;
+            ? `Игры с ${formatDate(startDate)} по ${formatDate(endDate)} (${chunkNum}/${totalChunks})`
+            : `Игры с ${formatDate(startDate)} по ${formatDate(endDate)}`;
         
         // Формируем варианты ответов
         const options = chunk.map((g) => {
@@ -110,4 +107,14 @@ export async function createPollsByDatePeriod(bot: Bot, chatId: string | number,
     }
     
     return pollsCreated;
+}
+
+/**
+ * Creates polls for games within a specified number of days from now
+ * This is a convenience wrapper around createPollsByDateRange
+ */
+export async function createPollsByDatePeriod(bot: Bot, chatId: string | number, games: any[], periodDays: number): Promise<number> {
+    const now = new Date();
+    const endDate = new Date(now.getTime() + periodDays * 24 * 60 * 60 * 1000);
+    return createPollsByDateRange(bot, chatId, games, now, endDate);
 }
