@@ -16,6 +16,14 @@ const bot = createBot();
     process.exit(1);
   }
 
+  // Delete old commands first to clear cache
+  try {
+    await bot.api.deleteMyCommands();
+    log.info('Old commands cleared');
+  } catch (e) {
+    log.warn('Could not clear old commands:', e);
+  }
+
   await bot.api.setMyCommands([
     { command: 'help', description: 'Список команд' },
     { command: 'select_city', description: 'Выбрать город' },
