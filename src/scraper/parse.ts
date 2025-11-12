@@ -15,7 +15,7 @@ export function parseQuizPlease(html: string, baseUrl: string): RawGame[] {
         return href.startsWith('http') ? href : new URL(href, baseUrl).toString();
     };
 
-    $('.schedule-column').each((_, col) => {
+    scheduleColumns.each((_, col) => {
         const idAttr = $(col).attr('id');
         const block = $(col).find('.schedule-block').first();
 
