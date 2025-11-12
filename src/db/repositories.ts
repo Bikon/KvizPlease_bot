@@ -204,6 +204,19 @@ export async function resetChatData(chatId: string): Promise<void> {
     await pool.query('DELETE FROM polls WHERE chat_id=$1', [chatId]);
 }
 
+export async function changeSourceUrl(chatId: string, newUrl: string): Promise<void> {
+    // Очищаем все данные чата при смене источника
+    await pool.query('DELETE FROM chat_played_groups WHERE chat_id=$1', [chatId]);
+    await pool.query('DELETE FROM chat_excluded_types WHERE chat_id=$1', [chatId]);
+    await pool.query('DELETE FROM games WHERE chat_id=$1', [chatId]);
+    await pool.query('DELETE FROM polls WHERE chat_id=$1', [chatId]);
+    await pool.query('DELETE FROM chat_settings WHERE chat_id=$1 AND key=$2', [chatId, 'last_sync_at']);
+    await pool.query('DELETE FROM chat_settings WHERE chat_id=$1 AND key=$2', [chatId, 'pending_source_url']);
+    
+    // Устанавливаем новый источник
+    await setChatSetting(chatId, 'source_url', newUrl);
+}
+
 export async function deletePastGames(chatId: string): Promise<number> {
     const res = await pool.query('DELETE FROM games WHERE chat_id=$1 AND date_time < now() RETURNING id', [chatId]);
     return res.rowCount ?? 0;

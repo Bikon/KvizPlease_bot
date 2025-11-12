@@ -19,6 +19,7 @@ import {
     moreKeyboard,
 } from './bot/ui/keyboards.js';
 import {
+    changeSourceUrl,
     countAllUpcomingGames,
     deletePastGames,
     excludeGroup,
@@ -26,7 +27,6 @@ import {
     getChatSetting,
     listExcludedTypes,
     markGroupPlayed,
-    pool,
     resetChatData,
     setChatSetting,
     unexcludeGroup,
@@ -45,6 +45,7 @@ import {
     postGroupPoll,
 } from './services/pollService.js';
 import { formatGameDateTime } from './utils/dateFormatter.js';
+import { filterGamesByTypes, getPollWordForm, sortGamesByDate } from './utils/gameFilters.js';
 import { log } from './utils/logger.js';
 import { parseDate, formatDateForDisplay, validateDateRange } from './utils/dateParser.js';
 import { setConversationState, getConversationState, clearConversationState } from './utils/conversationState.js';
@@ -254,16 +255,8 @@ export function createBot() {
         }
         
         try {
-            // Очищаем все данные чата
-            await pool.query('DELETE FROM chat_played_groups WHERE chat_id=$1', [chatId]);
-            await pool.query('DELETE FROM chat_excluded_types WHERE chat_id=$1', [chatId]);
-            await pool.query('DELETE FROM games WHERE chat_id=$1', [chatId]);
-            await pool.query('DELETE FROM polls WHERE chat_id=$1', [chatId]);
-            await pool.query('DELETE FROM chat_settings WHERE chat_id=$1 AND key=$2', [chatId, 'last_sync_at']);
-            await pool.query('DELETE FROM chat_settings WHERE chat_id=$1 AND key=$2', [chatId, 'pending_source_url']);
-            
-            // Устанавливаем новый источник
-            await setChatSetting(chatId, 'source_url', pendingUrl);
+            // Очищаем все данные и устанавливаем новый источник
+            await changeSourceUrl(chatId, pendingUrl);
             await ctx.reply('✅ Все данные удалены. Новый источник установлен. Теперь можно запустить синхронизацию расписания игр /sync.');
             await updateChatCommands(bot, chatId, true);
         } catch (e) {
@@ -716,23 +709,14 @@ export function createBot() {
                 await ctx.reply(`🔄 Создаю опросы для ${selectedTypes.size} типов игр без фильтра по дате...`);
                 
                 const games = await getFilteredUpcoming(chatId);
-                
-                // Filter games by selected types and sort by date
-                const filteredGames = games.filter(g => {
-                    const gameType = g.title.split('#')[0].trim();
-                    return selectedTypes.has(gameType) || Array.from(selectedTypes).some(t => g.title.includes(t));
-                });
-                
-                const sortedGames = filteredGames.sort((a, b) => 
-                    new Date(a.date_time).getTime() - new Date(b.date_time).getTime()
-                );
+                const filteredGames = filterGamesByTypes(games, selectedTypes);
+                const sortedGames = sortGamesByDate(filteredGames);
                 
                 if (sortedGames.length === 0) {
                     clearSelectedTypes(chatId);
                     return await ctx.reply('Нет игр выбранных типов.');
                 }
                 
-                // Create date-range polls with the filtered games
                 const created = await createPollsByDatePeriod(bot, chatId, sortedGames, 365);
                 
                 clearSelectedTypes(chatId);
@@ -769,16 +753,8 @@ export function createBot() {
                 await ctx.reply(`🔄 Создаю опросы для ${selectedTypes.size} типов за ${days} дней...`);
                 
                 const games = await getFilteredUpcoming(chatId);
-                
-                // Filter by selected types
-                const filteredGames = games.filter(g => {
-                    const gameType = g.title.split('#')[0].trim();
-                    return selectedTypes.has(gameType) || Array.from(selectedTypes).some(t => g.title.includes(t));
-                });
-                
-                const sortedGames = filteredGames.sort((a, b) => 
-                    new Date(a.date_time).getTime() - new Date(b.date_time).getTime()
-                );
+                const filteredGames = filterGamesByTypes(games, selectedTypes);
+                const sortedGames = sortGamesByDate(filteredGames);
                 
                 if (sortedGames.length === 0) {
                     clearSelectedTypes(chatId);
@@ -789,8 +765,7 @@ export function createBot() {
                 
                 clearSelectedTypes(chatId);
                 if (created > 0) {
-                    const pollWord = created === 1 ? 'опрос' : created < 5 ? 'опроса' : 'опросов';
-                    await ctx.reply(`✅ Создано ${created} ${pollWord} для игр выбранных типов на ${days} дней вперёд.`);
+                    await ctx.reply(`✅ Создано ${created} ${getPollWordForm(created)} для игр выбранных типов на ${days} дней вперёд.`);
                 } else {
                     await ctx.reply('Нет игр в выбранном периоде.');
                 }
@@ -822,8 +797,7 @@ export function createBot() {
                 
                 await ctx.answerCallbackQuery({ text: created ? `Создано: ${created}` : 'Нет игр' });
                 if (created > 0) {
-                    const pollWord = created === 1 ? 'опрос' : created < 5 ? 'опроса' : 'опросов';
-                    await ctx.reply(`✅ Создано ${created} ${pollWord} для игр на ${days} дней вперёд.`);
+                    await ctx.reply(`✅ Создано ${created} ${getPollWordForm(created)} для игр на ${days} дней вперёд.`);
                 } else {
                     await ctx.reply('Нет игр в выбранном периоде.');
                 }
@@ -1003,10 +977,7 @@ export function createBot() {
                 // Filter by selected types if flag is set
                 if (filterByTypes) {
                     const selectedTypes = getSelectedTypes(chatId);
-                    games = games.filter(g => {
-                        const gameType = g.title.split('#')[0].trim();
-                        return selectedTypes.has(gameType) || Array.from(selectedTypes).some(t => g.title.includes(t));
-                    });
+                    games = filterGamesByTypes(games, selectedTypes);
                     
                     if (games.length === 0) {
                         clearSelectedTypes(chatId);
@@ -1021,9 +992,8 @@ export function createBot() {
                 }
                 
                 if (created > 0) {
-                    const pollWord = created === 1 ? 'опрос' : created < 5 ? 'опроса' : 'опросов';
                     const suffix = filterByTypes ? ' для игр выбранных типов' : '';
-                    await ctx.reply(`✅ Создано ${created} ${pollWord} для игр с ${formatDateForDisplay(startDate)} по ${formatDateForDisplay(endDate)}${suffix}.`);
+                    await ctx.reply(`✅ Создано ${created} ${getPollWordForm(created)} для игр с ${formatDateForDisplay(startDate)} по ${formatDateForDisplay(endDate)}${suffix}.`);
                 } else {
                     await ctx.reply('❌ Нет игр в выбранном периоде.');
                 }

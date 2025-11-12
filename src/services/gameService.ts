@@ -9,11 +9,12 @@ import { grabPageHtmlWithFilters } from '../scraper/fetch.js';
 import { normalize } from '../scraper/normalize.js';
 import { parseQuizPlease } from '../scraper/parse.js';
 import { log } from '../utils/logger.js';
+import { extractGameNumber } from '../utils/patterns.js';
 import { syncQueue } from '../utils/syncQueue.js';
 
 function extractGroupKey(title: string) {
     // На входе title вроде: "[music party] рашн эдишн #7" или "Квиз, плиз! #1212"
-    const num = title.match(/#(\d+)/)?.[1] ?? '';
+    const num = extractGameNumber(title) ?? '';
     // тип: всё до " #"
     let typeName = title.split('#')[0].trim();
     typeName = typeName.replace(/\s+$/,'');
