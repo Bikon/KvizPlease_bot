@@ -50,7 +50,7 @@ import { log } from './utils/logger.js';
 import { parseDate, formatDateForDisplay, validateDateRange } from './utils/dateParser.js';
 import { setConversationState, getConversationState, clearConversationState } from './utils/conversationState.js';
 import { toggleSelectedType, getSelectedTypes, clearSelectedTypes } from './utils/selectedTypes.js';
-import type { DbGame, DbGameGroup } from './types.js';
+import type { DbGame } from './types.js';
 
 function getChatId(ctx: Context): string {
     return String(

@@ -6,7 +6,7 @@
 export const GAME_NUMBER_PATTERN = /#(\d+)/;
 
 // Match content in square brackets (e.g., "[караоке]")
-export const BRACKET_CONTENT_PATTERN = /\[.+?\].*/;
+export const BRACKET_CONTENT_PATTERN = /\[.+?].*/;
 
 // Match time format "в HH:MM" (case insensitive)
 export const TIME_FORMAT_PATTERN = /^в\s*\d{1,2}:\d{2}$/i;
