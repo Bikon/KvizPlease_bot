@@ -53,12 +53,13 @@ export function buildCitySelectionKeyboard() {
     return kb;
 }
 
-export function buildPollsByDateKeyboard() {
+export function buildPollsByDateKeyboard(filtered = false) {
     const kb = new InlineKeyboard();
-    kb.text('📅 Неделя', CB.POLLS_BY_DATE + 'week').row();
-    kb.text('📅 2 недели', CB.POLLS_BY_DATE + '2weeks').row();
-    kb.text('📅 Месяц', CB.POLLS_BY_DATE + 'month').row();
-    kb.text('📆 Свой период', CB.POLLS_BY_DATE + 'custom');
+    const prefix = filtered ? CB.POLLS_BY_DATE_FILTERED : CB.POLLS_BY_DATE;
+    kb.text('📅 Неделя', prefix + 'week').row();
+    kb.text('📅 2 недели', prefix + '2weeks').row();
+    kb.text('📅 Месяц', prefix + 'month').row();
+    kb.text('📆 Свой период', prefix + 'custom');
     return kb;
 }
 
@@ -113,6 +114,13 @@ export function buildGameTypesMenuKeyboard() {
     kb.text('🚫 Исключить типы', CB.TYPES_MENU_EXCLUDE).row();
     kb.text('♻️ Восстановить типы', CB.TYPES_MENU_RESTORE).row();
     kb.text('📋 Список исключённых', CB.TYPES_MENU_SHOW_LIST);
+    return kb;
+}
+
+export function buildPollsByTypesDateFilterKeyboard(typesCount: number) {
+    const kb = new InlineKeyboard();
+    kb.text('📅 С фильтром по дате', CB.POLLS_BY_TYPE_WITH_DATE).row();
+    kb.text(`🌐 Без фильтра (все игры типов: ${typesCount})`, CB.POLLS_BY_TYPE_NO_DATE);
     return kb;
 }
 

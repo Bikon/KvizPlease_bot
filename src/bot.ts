@@ -11,6 +11,7 @@ import {
     buildPlayedKeyboard,
     buildPollsByDateKeyboard,
     buildPollsByPackageKeyboard,
+    buildPollsByTypesDateFilterKeyboard,
     buildPollsByTypesKeyboard,
     buildPollsMainMenuKeyboard,
     buildRestoreTypesKeyboard,
@@ -681,14 +682,43 @@ export function createBot() {
                     return await ctx.answerCallbackQuery({ text: 'Не выбрано ни одного типа', show_alert: true });
                 }
                 
+                // Show date filter options
+                const kb = buildPollsByTypesDateFilterKeyboard(selectedTypes.size);
+                await ctx.editMessageText(
+                    `✅ Выбрано типов: ${selectedTypes.size}\n\n` +
+                    'Выберите вариант создания опросов:\n\n' +
+                    '📅 С фильтром по дате — создать опросы только для игр в указанном периоде\n' +
+                    '🌐 Без фильтра — создать опросы для всех игр выбранных типов',
+                    { reply_markup: kb }
+                );
+                await ctx.answerCallbackQuery();
+            } else if (data === CB.POLLS_BY_TYPE_WITH_DATE) {
+                const selectedTypes = getSelectedTypes(chatId);
+                if (selectedTypes.size === 0) {
+                    return await ctx.answerCallbackQuery({ text: 'Не выбрано ни одного типа', show_alert: true });
+                }
+                
+                // Show date period selection with filtered callbacks
+                const kb = buildPollsByDateKeyboard(true);
+                await ctx.editMessageText(
+                    `📅 Фильтр по дате для ${selectedTypes.size} типов\n\n` +
+                    'Выберите период времени для фильтрации игр:',
+                    { reply_markup: kb }
+                );
+                await ctx.answerCallbackQuery();
+            } else if (data === CB.POLLS_BY_TYPE_NO_DATE) {
+                const selectedTypes = getSelectedTypes(chatId);
+                if (selectedTypes.size === 0) {
+                    return await ctx.answerCallbackQuery({ text: 'Не выбрано ни одного типа', show_alert: true });
+                }
+                
                 await ctx.answerCallbackQuery({ text: 'Создаю опросы...' });
-                await ctx.reply(`🔄 Создаю опросы для ${selectedTypes.size} типов игр...`);
+                await ctx.reply(`🔄 Создаю опросы для ${selectedTypes.size} типов игр без фильтра по дате...`);
                 
                 const games = await getFilteredUpcoming(chatId);
                 
                 // Filter games by selected types and sort by date
                 const filteredGames = games.filter(g => {
-                    // Extract type name from group_key or title
                     const gameType = g.title.split('#')[0].trim();
                     return selectedTypes.has(gameType) || Array.from(selectedTypes).some(t => g.title.includes(t));
                 });
@@ -703,10 +733,67 @@ export function createBot() {
                 }
                 
                 // Create date-range polls with the filtered games
-                const created = await createPollsByDatePeriod(bot, chatId, sortedGames, 30);
+                const created = await createPollsByDatePeriod(bot, chatId, sortedGames, 365);
                 
                 clearSelectedTypes(chatId);
                 await ctx.reply(created ? `✅ Опросов создано: ${created}` : 'Нет подходящих игр для создания опросов.');
+            } else if (data.startsWith(CB.POLLS_BY_DATE_FILTERED)) {
+                const period = data.slice(CB.POLLS_BY_DATE_FILTERED.length);
+                const selectedTypes = getSelectedTypes(chatId);
+                
+                if (selectedTypes.size === 0) {
+                    return await ctx.answerCallbackQuery({ text: 'Не выбрано ни одного типа', show_alert: true });
+                }
+                
+                if (period === 'custom') {
+                    // Start dialog for custom date input
+                    log.info(`[Conversation] Starting custom date dialog for chat ${chatId} with type filter`);
+                    setConversationState(chatId, 'waiting_start_date', { filterByTypes: true });
+                    await ctx.answerCallbackQuery({ text: 'Введите даты' });
+                    await ctx.reply(
+                        '📆 Введите дату начала периода в формате:\n' +
+                        '• ДД.ММ.ГГГГ (например, 15.12.2024)\n' +
+                        '• ДД.ММ.ГГ (например, 15.12.24)\n' +
+                        '• ДД.ММ (например, 15.12 - будет использован текущий год)\n\n' +
+                        '⚠️ В групповом чате: ответьте (reply) на это сообщение с датой\n' +
+                        'или отправьте /cancel для отмены.'
+                    );
+                    return;
+                }
+                
+                let days = 7;
+                if (period === '2weeks') days = 14;
+                else if (period === 'month') days = 30;
+                
+                await ctx.answerCallbackQuery({ text: 'Создаю опросы...' });
+                await ctx.reply(`🔄 Создаю опросы для ${selectedTypes.size} типов за ${days} дней...`);
+                
+                const games = await getFilteredUpcoming(chatId);
+                
+                // Filter by selected types
+                const filteredGames = games.filter(g => {
+                    const gameType = g.title.split('#')[0].trim();
+                    return selectedTypes.has(gameType) || Array.from(selectedTypes).some(t => g.title.includes(t));
+                });
+                
+                const sortedGames = filteredGames.sort((a, b) => 
+                    new Date(a.date_time).getTime() - new Date(b.date_time).getTime()
+                );
+                
+                if (sortedGames.length === 0) {
+                    clearSelectedTypes(chatId);
+                    return await ctx.reply('Нет игр выбранных типов.');
+                }
+                
+                const created = await createPollsByDatePeriod(bot, chatId, sortedGames, days);
+                
+                clearSelectedTypes(chatId);
+                if (created > 0) {
+                    const pollWord = created === 1 ? 'опрос' : created < 5 ? 'опроса' : 'опросов';
+                    await ctx.reply(`✅ Создано ${created} ${pollWord} для игр выбранных типов на ${days} дней вперёд.`);
+                } else {
+                    await ctx.reply('Нет игр в выбранном периоде.');
+                }
             } else if (data.startsWith(CB.POLLS_BY_DATE)) {
                 const period = data.slice(CB.POLLS_BY_DATE.length);
                 
@@ -872,7 +959,11 @@ export function createBot() {
                 
                 // Save start date and ask for end date
                 log.info(`[Conversation] Start date accepted: ${formatDateForDisplay(startDate)}`);
-                setConversationState(chatId, 'waiting_end_date', { startDate: startDate.toISOString() });
+                const filterByTypes = state.data?.filterByTypes || false;
+                setConversationState(chatId, 'waiting_end_date', { 
+                    startDate: startDate.toISOString(),
+                    filterByTypes 
+                });
                 
                 await ctx.reply(
                     `✅ Дата начала: ${formatDateForDisplay(startDate)}\n\n` +
@@ -902,16 +993,37 @@ export function createBot() {
                 
                 // Create polls
                 log.info(`[Conversation] Creating polls for date range: ${formatDateForDisplay(startDate)} - ${formatDateForDisplay(endDate)}`);
+                const filterByTypes = state.data?.filterByTypes || false;
                 clearConversationState(chatId);
                 
                 await ctx.reply(`⏳ Создаю опросы для периода с ${formatDateForDisplay(startDate)} по ${formatDateForDisplay(endDate)}...`);
                 
-                const games = await getFilteredUpcoming(chatId);
+                let games = await getFilteredUpcoming(chatId);
+                
+                // Filter by selected types if flag is set
+                if (filterByTypes) {
+                    const selectedTypes = getSelectedTypes(chatId);
+                    games = games.filter(g => {
+                        const gameType = g.title.split('#')[0].trim();
+                        return selectedTypes.has(gameType) || Array.from(selectedTypes).some(t => g.title.includes(t));
+                    });
+                    
+                    if (games.length === 0) {
+                        clearSelectedTypes(chatId);
+                        return await ctx.reply('❌ Нет игр выбранных типов в указанном периоде.');
+                    }
+                }
+                
                 const created = await createPollsByDateRange(bot, chatId, games, startDate, endDate);
+                
+                if (filterByTypes) {
+                    clearSelectedTypes(chatId);
+                }
                 
                 if (created > 0) {
                     const pollWord = created === 1 ? 'опрос' : created < 5 ? 'опроса' : 'опросов';
-                    await ctx.reply(`✅ Создано ${created} ${pollWord} для игр с ${formatDateForDisplay(startDate)} по ${formatDateForDisplay(endDate)}.`);
+                    const suffix = filterByTypes ? ' для игр выбранных типов' : '';
+                    await ctx.reply(`✅ Создано ${created} ${pollWord} для игр с ${formatDateForDisplay(startDate)} по ${formatDateForDisplay(endDate)}${suffix}.`);
                 } else {
                     await ctx.reply('❌ Нет игр в выбранном периоде.');
                 }
