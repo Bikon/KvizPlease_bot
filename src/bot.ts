@@ -41,7 +41,7 @@ import {
 import { formatGameDateTime } from './utils/dateFormatter.js';
 import { log } from './utils/logger.js';
 import { parseDate, formatDateForDisplay, validateDateRange } from './utils/dateParser.js';
-import { setConversationState, getConversationState, clearConversationState, updateConversationData } from './utils/conversationState.js';
+import { setConversationState, getConversationState, clearConversationState } from './utils/conversationState.js';
 import type { DbGame, DbGameGroup } from './types.js';
 
 function getChatId(ctx: Context): string {
