@@ -7,6 +7,7 @@ import { CB } from './bot/constants.js';
 import { resolveButtonId } from './bot/ui/buttonMapping.js';
 import {
     buildCitySelectionKeyboard,
+    buildGameSelectionKeyboard,
     buildGameTypesMenuKeyboard,
     buildPlayedKeyboard,
     buildPollsByDateKeyboard,
@@ -14,6 +15,8 @@ import {
     buildPollsByTypesDateFilterKeyboard,
     buildPollsByTypesKeyboard,
     buildPollsMainMenuKeyboard,
+    buildPollSelectionKeyboard,
+    buildRegisteredGamesKeyboard,
     buildRestoreTypesKeyboard,
     buildTypesKeyboard,
     moreKeyboard,
@@ -24,14 +27,24 @@ import {
     deletePastGames,
     excludeGroup,
     excludeType,
+    findUnprocessedPollsWithVotes,
+    getGameByExternalId,
     getChatSetting,
+    getPollOptionVotes,
+    getTeamInfo,
     listExcludedTypes,
+    markGameRegistered,
     markGroupPlayed,
+    markPollProcessedForRegistration,
     resetChatData,
+    saveTeamInfo,
     setChatSetting,
     unexcludeGroup,
     unexcludeType,
+    unmarkGameRegistered,
     unmarkGroupPlayed,
+    type TeamInfo,
+    type PollWithVotes,
 } from './db/repositories.js';
 import {
     getFilteredUpcoming,
@@ -47,9 +60,12 @@ import {
 import { formatGameDateTime } from './utils/dateFormatter.js';
 import { filterGamesByTypes, getPollWordForm, sortGamesByDate } from './utils/gameFilters.js';
 import { log } from './utils/logger.js';
-import { parseDate, formatDateForDisplay, validateDateRange } from './utils/dateParser.js';
+import { parseDate, formatDateForDisplay, formatDateTimeForDisplay, validateDateRange } from './utils/dateParser.js';
+import { isValidEmail, validateAndNormalizePhone } from './utils/patterns.js';
 import { setConversationState, getConversationState, clearConversationState } from './utils/conversationState.js';
 import { toggleSelectedType, getSelectedTypes, clearSelectedTypes } from './utils/selectedTypes.js';
+import { toggleSelectedPoll, getSelectedPolls, clearSelectedPolls, toggleSelectedGame, getSelectedGames, clearSelectedGames, setPollGameMapping, getPollGameMapping, clearAllRegistrationState } from './utils/registrationState.js';
+import { registerForGame } from './services/registrationService.js';
 import type { DbGame } from './types.js';
 
 function getChatId(ctx: Context): string {
@@ -106,6 +122,59 @@ function buildUpcomingChunk(
     return { text: parts[0], nextOffset: offset + 1 < games.length ? offset + 1 : null };
 }
 
+function truncateText(text: string, maxLength = 48): string {
+    if (text.length <= maxLength) return text;
+    return `${text.slice(0, maxLength - 1)}…`;
+}
+
+async function buildPollSelectionItems(chatId: string, polls: PollWithVotes[]) {
+    const items: Array<{ poll_id: string; label: string; vote_count: number }> = [];
+
+    for (const poll of polls) {
+        const optionVotes = await getPollOptionVotes(poll.poll_id);
+        const validOptions = optionVotes.filter((opt) => !opt.is_unavailable && opt.vote_count >= 2);
+
+        if (!validOptions.length) {
+            continue;
+        }
+
+        const maxVotes = Math.max(...validOptions.map((opt) => opt.vote_count));
+        const winners = validOptions.filter((opt) => opt.vote_count === maxVotes);
+
+        let leaderSummary: string | null = null;
+
+        for (const winner of winners) {
+            if (!winner.game_external_id) continue;
+            const game = await getGameByExternalId(chatId, winner.game_external_id);
+            if (!game) continue;
+            const { dd, mm, hh, mi } = formatGameDateTime(game.date_time);
+            const title = truncateText(game.title ?? 'Игра');
+            leaderSummary = `${title} • ${dd}.${mm} ${hh}:${mi}`;
+            break;
+        }
+
+        const createdAtDisplay = poll.created_at ? formatDateTimeForDisplay(new Date(poll.created_at)) : null;
+        const baseTitle = poll.group_key || `Опрос #${poll.message_id}`;
+        const infoParts = [baseTitle];
+
+        if (leaderSummary) {
+            infoParts.push(leaderSummary);
+        } else if (createdAtDisplay) {
+            infoParts.push(`создан ${createdAtDisplay}`);
+        }
+
+        const label = infoParts.join(' • ');
+
+        items.push({
+            poll_id: poll.poll_id,
+            label,
+            vote_count: poll.vote_count,
+        });
+    }
+
+    return items;
+}
+
 async function updateChatCommands(bot: Bot, chatId: string, hasSource: boolean) {
     const base = [
         { command: 'help', description: 'Список команд' },
@@ -116,6 +185,9 @@ async function updateChatCommands(bot: Bot, chatId: string, hasSource: boolean) 
         { command: 'upcoming_by_dates', description: 'Будущие игры (по датам)' },
         { command: 'polls', description: 'Создать опросы' },
         { command: 'played', description: 'Управление статусом игр' },
+        { command: 'team_info', description: 'Информация о команде' },
+        { command: 'register_from_polls', description: 'Регистрация по опросам' },
+        { command: 'registered', description: 'Управление регистрациями' },
         { command: 'reset', description: 'Очистить данные' },
     ];
     const withSync = hasSource ? [{ command: 'sync', description: 'Синхронизировать игры из расписания' }, ...base] : base;
@@ -154,6 +226,9 @@ export function createBot() {
             '/game_packs_management — список пакетов и управление типами игр.',
             '/polls — создать опросы (меню: по типам / по датам / по пакету / для всех).',
             '/played — управление статусом игр.',
+            '/team_info — информация о команде (просмотр/редактирование).',
+            '/register_from_polls — проанализировать опросы и зарегистрироваться на игры.',
+            '/registered — управление статусами регистрации на игры.',
             '/cancel — отменить текущий диалог (например, ввод дат).',
             '/reset — полностью очистить все данные этого чата (источник, игры, настройки).'
         ].join('\n'));
@@ -472,6 +547,115 @@ export function createBot() {
         }
     });
 
+    // Команда для ввода информации о команде
+    bot.command('team_info', async (ctx) => {
+        const chatId = getChatId(ctx);
+        const existingInfo = await getTeamInfo(chatId);
+        
+        if (existingInfo) {
+            await ctx.reply(
+                '👥 Информация о команде\n\n' +
+                `Название команды: ${existingInfo.team_name}\n` +
+                `Капитан: ${existingInfo.captain_name}\n` +
+                `Email: ${existingInfo.email}\n` +
+                `Телефон: ${existingInfo.phone}\n\n` +
+                'Для изменения данных отправьте /team_info_edit'
+            );
+        } else {
+            await ctx.reply(
+                '👥 Информация о команде не заполнена.\n\n' +
+                'Для заполнения отправьте /team_info_edit'
+            );
+        }
+    });
+
+    bot.command('team_info_edit', async (ctx) => {
+        const chatId = getChatId(ctx);
+        
+        log.info(`[Team Info] Starting team info dialog for chat ${chatId}`);
+        setConversationState(chatId, 'team_info_name');
+        
+        await ctx.reply(
+            '👥 Заполнение информации о команде\n\n' +
+            '📝 Шаг 1/4: Введите название вашей команды:\n\n' +
+            '⚠️ В групповом чате: ответьте (reply) на это сообщение\n' +
+            'или отправьте /cancel для отмены.'
+        );
+    });
+
+    // Команда регистрации на игры по результатам опросов
+    bot.command('register_from_polls', async (ctx) => {
+        const chatId = getChatId(ctx);
+        
+        // Check if team info is filled
+        const teamInfo = await getTeamInfo(chatId);
+        if (!teamInfo) {
+            return ctx.reply(
+                '❌ Сначала заполните информацию о команде.\n\n' +
+                'Используйте /team_info_edit для заполнения данных команды.'
+            );
+        }
+        
+        // Find unprocessed polls with votes
+        const polls = await findUnprocessedPollsWithVotes(chatId);
+        
+        if (polls.length === 0) {
+            return ctx.reply(
+                '📊 Нет необработанных опросов с голосами.\n\n' +
+                'Создайте опросы с помощью /polls и дождитесь, пока участники проголосуют.'
+            );
+        }
+        
+        const pollSelectionItems = await buildPollSelectionItems(chatId, polls);
+        
+        if (pollSelectionItems.length === 0) {
+            return ctx.reply(
+                '📊 Нет опросов с явными победителями.\n\n' +
+                'Для автоматической регистрации необходимо минимум 2 голоса за один вариант ответа.'
+            );
+        }
+        
+        log.info(`[Registration] Chat ${chatId} - found ${pollSelectionItems.length} polls with winners`);
+        
+        // Clear previous selections
+        clearAllRegistrationState(chatId);
+        
+        // Show poll selection keyboard
+        const kb = buildPollSelectionKeyboard(pollSelectionItems, new Set());
+        await ctx.reply(
+            `📊 Анализ опросов завершён\n\n` +
+            `Найдено опросов с победителями: ${pollSelectionItems.length}\n\n` +
+            `Выберите опросы для обработки:\n` +
+            `(Нужно 2+ голоса за вариант, кроме "Не смогу")`,
+            { reply_markup: kb }
+        );
+    });
+
+    // Команда управления регистрациями
+    bot.command('registered', async (ctx) => {
+        const chatId = getChatId(ctx);
+        const games = await getFilteredUpcoming(chatId);
+        
+        const registeredGames = games.filter(g => g.registered);
+        const allGames = games.map(g => ({
+            external_id: g.external_id,
+            title: g.title,
+            registered: g.registered || false
+        }));
+        
+        if (allGames.length === 0) {
+            return ctx.reply('Нет доступных игр.');
+        }
+        
+        const kb = buildRegisteredGamesKeyboard(allGames);
+        await ctx.reply(
+            `📝 Управление регистрациями\n\n` +
+            `Зарегистрировано игр: ${registeredGames.length}\n\n` +
+            `Нажмите на игру, чтобы переключить статус регистрации:`,
+            { reply_markup: kb }
+        );
+    });
+
     // Коллбэки
     bot.on('callback_query:data', async (ctx) => {
         const data = ctx.callbackQuery.data!;
@@ -536,6 +720,7 @@ export function createBot() {
                     const n = r.num || '?';
                     let icons = '';
                     if (r.played) icons += '✅ ';
+                    if (r.registered_count > 0) icons += '📝 ';
                     if (r.polled_by_package) icons += '🗳 ';
                     if (r.polled_by_date) icons += '📅 ';
                     return `${i + 1}. ${icons}${name} #${n} — дат: ${r.cnt}`;
@@ -543,6 +728,7 @@ export function createBot() {
                 
                 msg += '\n\n📖 Легенда:\n';
                 msg += '✅ — сыграно\n';
+                msg += '📝 — зарегистрировано на игру(ы)\n';
                 msg += '🗳 — опрос по пакету создан\n';
                 msg += '📅 — игра из пакета участвует в опросе по дате';
                 
@@ -875,6 +1061,224 @@ export function createBot() {
                 const kb = buildPlayedKeyboard(rows);
                 await ctx.editMessageReplyMarkup({ reply_markup: kb });
                 await ctx.answerCallbackQuery({ text: 'Снята отметка «сыграно»' });
+            } else if (data.startsWith(CB.REG_POLL_TOGGLE)) {
+                const buttonId = data.slice(CB.REG_POLL_TOGGLE.length);
+                const pollId = resolveButtonId(buttonId);
+                if (!pollId) return await ctx.answerCallbackQuery({ text: 'Ошибка: кнопка устарела' });
+                
+                toggleSelectedPoll(chatId, pollId);
+                const selectedPolls = getSelectedPolls(chatId);
+                
+                // Rebuild keyboard with current selections
+                const polls = await findUnprocessedPollsWithVotes(chatId);
+                const pollSelectionItems = await buildPollSelectionItems(chatId, polls);
+                
+                const kb = buildPollSelectionKeyboard(pollSelectionItems, selectedPolls);
+                await ctx.editMessageReplyMarkup({ reply_markup: kb });
+                await ctx.answerCallbackQuery({ text: selectedPolls.has(pollId) ? '✅ Выбрано' : '❌ Снято' });
+            } else if (data === CB.REG_POLL_CONFIRM) {
+                const selectedPolls = getSelectedPolls(chatId);
+                if (selectedPolls.size === 0) {
+                    return await ctx.answerCallbackQuery({ text: 'Не выбрано ни одного опроса', show_alert: true });
+                }
+                
+                await ctx.answerCallbackQuery({ text: 'Анализирую...' });
+                await ctx.reply(`🔍 Анализирую ${selectedPolls.size} опросов...`);
+                
+                // Collect all winning games from selected polls
+                const winningGames: Array<{ external_id: string; title: string; date: string; venue: string; vote_count: number; url: string }> = [];
+                const gameVoteMap = new Map<string, number>();
+                
+                for (const pollId of selectedPolls) {
+                    const optionVotes = await getPollOptionVotes(pollId);
+                    
+                    // Find max vote count (excluding unavailable)
+                    const validOptions = optionVotes.filter(opt => !opt.is_unavailable && opt.game_external_id);
+                    const maxVotes = Math.max(...validOptions.map(opt => opt.vote_count), 0);
+                    
+                    // Get all options with max votes (can be multiple winners)
+                    const winners = validOptions.filter(opt => opt.vote_count === maxVotes && opt.vote_count >= 1);
+                    
+                    for (const winner of winners) {
+                        if (!winner.game_external_id) continue;
+                        
+                        const game = await getGameByExternalId(chatId, winner.game_external_id);
+                        if (!game) continue;
+                        
+                        // Skip past games
+                        if (new Date(game.date_time) < new Date()) continue;
+                        
+                        // Skip already registered games
+                        if (game.registered) continue;
+                        
+                        const { dd, mm, hh, mi } = formatGameDateTime(game.date_time);
+                        winningGames.push({
+                            external_id: game.external_id,
+                            title: game.title,
+                            date: `${dd}.${mm} ${hh}:${mi}`,
+                            venue: game.venue || '',
+                            vote_count: winner.vote_count,
+                            url: game.url
+                        });
+                        
+                        gameVoteMap.set(game.external_id, winner.vote_count);
+                    }
+                }
+                
+                if (winningGames.length === 0) {
+                    clearAllRegistrationState(chatId);
+                    return await ctx.reply('❌ Не найдено побед ителей среди выбранных опросов или все игры уже в прошлом/зарегистрированы.');
+                }
+                
+                // Store game-vote mapping
+                setPollGameMapping(chatId, gameVoteMap);
+                
+                // Show game selection keyboard
+                const kb = buildGameSelectionKeyboard(winningGames, new Set());
+                await ctx.reply(
+                    `🎯 Найдено игр-победителей: ${winningGames.length}\n\n` +
+                    `Выберите игры для регистрации команды:`,
+                    { reply_markup: kb }
+                );
+            } else if (data.startsWith(CB.REG_GAME_TOGGLE)) {
+                const buttonId = data.slice(CB.REG_GAME_TOGGLE.length);
+                const gameExternalId = resolveButtonId(buttonId);
+                if (!gameExternalId) return await ctx.answerCallbackQuery({ text: 'Ошибка: кнопка устарела' });
+                
+                toggleSelectedGame(chatId, gameExternalId);
+                const selectedGames = getSelectedGames(chatId);
+                
+                // Get current winning games to rebuild keyboard
+                // (we need to re-fetch this data - in production, consider caching)
+                const selectedPolls = getSelectedPolls(chatId);
+                const winningGames = [];
+                const gameVoteMap = new Map<string, number>();
+                
+                for (const pollId of selectedPolls) {
+                    const optionVotes = await getPollOptionVotes(pollId);
+                    const validOptions = optionVotes.filter(opt => !opt.is_unavailable && opt.game_external_id);
+                    const maxVotes = Math.max(...validOptions.map(opt => opt.vote_count), 0);
+                    const winners = validOptions.filter(opt => opt.vote_count === maxVotes && opt.vote_count >= 2);
+                    
+                    for (const winner of winners) {
+                        if (!winner.game_external_id) continue;
+                        const game = await getGameByExternalId(chatId, winner.game_external_id);
+                        if (!game || new Date(game.date_time) < new Date() || game.registered) continue;
+                        
+                        const { dd, mm, hh, mi } = formatGameDateTime(game.date_time);
+                        winningGames.push({
+                            external_id: game.external_id,
+                            title: game.title,
+                            date: `${dd}.${mm} ${hh}:${mi}`,
+                            venue: game.venue || '',
+                            vote_count: winner.vote_count,
+                            url: game.url
+                        });
+                        gameVoteMap.set(game.external_id, winner.vote_count);
+                    }
+                }
+                
+                const kb = buildGameSelectionKeyboard(winningGames, selectedGames);
+                await ctx.editMessageReplyMarkup({ reply_markup: kb });
+                await ctx.answerCallbackQuery({ text: selectedGames.has(gameExternalId) ? '✅ Выбрано' : '❌ Снято' });
+            } else if (data === CB.REG_GAME_CONFIRM) {
+                const selectedGames = getSelectedGames(chatId);
+                if (selectedGames.size === 0) {
+                    return await ctx.answerCallbackQuery({ text: 'Не выбрано ни одной игры', show_alert: true });
+                }
+                
+                await ctx.answerCallbackQuery({ text: 'Начинаю регистрацию...' });
+                await ctx.reply(`🎮 Регистрирую команду на ${selectedGames.size} игр...`);
+                
+                const teamInfo = await getTeamInfo(chatId);
+                if (!teamInfo) {
+                    clearAllRegistrationState(chatId);
+                    return await ctx.reply('❌ Информация о команде не найдена. Используйте /team_info_edit.');
+                }
+                
+                const gameVoteMap = getPollGameMapping(chatId);
+                let registered = 0;
+                let failed = 0;
+                const selectedPolls = getSelectedPolls(chatId);
+                
+                for (const gameExternalId of selectedGames) {
+                    const game = await getGameByExternalId(chatId, gameExternalId);
+                    if (!game) {
+                        failed++;
+                        continue;
+                    }
+                    
+                    const voteCount = gameVoteMap.get(gameExternalId) || 2;
+                    
+                    log.info(`[Registration] Registering for game: ${game.title}, players: ${voteCount}`);
+                    
+                    const result = await registerForGame({
+                        gameUrl: game.url,
+                        teamInfo,
+                        playerCount: voteCount
+                    });
+                    
+                    if (result.success) {
+                        await markGameRegistered(chatId, gameExternalId);
+                        registered++;
+                        log.info(`[Registration] Successfully registered for: ${game.title}`);
+                    } else {
+                        failed++;
+                        log.error(`[Registration] Failed to register for: ${game.title}`, result.error);
+                    }
+                    
+                    // Small delay between registrations
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                }
+                
+                // Mark processed polls
+                for (const pollId of selectedPolls) {
+                    await markPollProcessedForRegistration(pollId);
+                }
+                
+                clearAllRegistrationState(chatId);
+                
+                await ctx.reply(
+                    `✅ Регистрация завершена!\n\n` +
+                    `Успешно: ${registered}\n` +
+                    `Ошибок: ${failed}\n\n` +
+                    `Опросов обработано: ${selectedPolls.size}\n\n` +
+                    `Используйте /registered для управления статусами регистрации.`
+                );
+            } else if (data.startsWith(CB.REGISTERED_MARK)) {
+                const buttonId = data.slice(CB.REGISTERED_MARK.length);
+                const gameExternalId = resolveButtonId(buttonId);
+                if (!gameExternalId) return await ctx.answerCallbackQuery({ text: 'Ошибка: кнопка устарела' });
+                
+                await markGameRegistered(chatId, gameExternalId);
+                
+                const games = await getFilteredUpcoming(chatId);
+                const allGames = games.map(g => ({
+                    external_id: g.external_id,
+                    title: g.title,
+                    registered: g.registered || false
+                }));
+                
+                const kb = buildRegisteredGamesKeyboard(allGames);
+                await ctx.editMessageReplyMarkup({ reply_markup: kb });
+                await ctx.answerCallbackQuery({ text: '✅ Отмечено как зарегистрировано' });
+            } else if (data.startsWith(CB.REGISTERED_UNMARK)) {
+                const buttonId = data.slice(CB.REGISTERED_UNMARK.length);
+                const gameExternalId = resolveButtonId(buttonId);
+                if (!gameExternalId) return await ctx.answerCallbackQuery({ text: 'Ошибка: кнопка устарела' });
+                
+                await unmarkGameRegistered(chatId, gameExternalId);
+                
+                const games = await getFilteredUpcoming(chatId);
+                const allGames = games.map(g => ({
+                    external_id: g.external_id,
+                    title: g.title,
+                    registered: g.registered || false
+                }));
+                
+                const kb = buildRegisteredGamesKeyboard(allGames);
+                await ctx.editMessageReplyMarkup({ reply_markup: kb });
+                await ctx.answerCallbackQuery({ text: '❌ Снята отметка регистрации' });
             }
         } catch (e) {
             log.error('Callback error:', e);
@@ -996,6 +1400,90 @@ export function createBot() {
                     await ctx.reply(`✅ Создано ${created} ${getPollWordForm(created)} для игр с ${formatDateForDisplay(startDate)} по ${formatDateForDisplay(endDate)}${suffix}.`);
                 } else {
                     await ctx.reply('❌ Нет игр в выбранном периоде.');
+                }
+            } else if (state.step === 'team_info_name') {
+                const teamName = text.trim();
+                if (!teamName || teamName.length < 2) {
+                    await ctx.reply('❌ Название команды слишком короткое. Попробуйте снова или отправьте /cancel для отмены.');
+                    return;
+                }
+                
+                log.info(`[Team Info] Chat ${chatId} - team name accepted: ${teamName}`);
+                setConversationState(chatId, 'team_info_captain', { team_name: teamName });
+                
+                await ctx.reply(
+                    `✅ Название команды: ${teamName}\n\n` +
+                    '📝 Шаг 2/4: Введите имя капитана команды:'
+                );
+            } else if (state.step === 'team_info_captain') {
+                const captainName = text.trim();
+                if (!captainName || captainName.length < 2) {
+                    await ctx.reply('❌ Имя капитана слишком короткое. Попробуйте снова или отправьте /cancel для отмены.');
+                    return;
+                }
+                
+                log.info(`[Team Info] Chat ${chatId} - captain name accepted: ${captainName}`);
+                setConversationState(chatId, 'team_info_email', { 
+                    team_name: state.data.team_name,
+                    captain_name: captainName 
+                });
+                
+                await ctx.reply(
+                    `✅ Капитан: ${captainName}\n\n` +
+                    '📝 Шаг 3/4: Введите email команды:\n' +
+                    'Например: team@example.com'
+                );
+            } else if (state.step === 'team_info_email') {
+                const email = text.trim();
+                if (!isValidEmail(email)) {
+                    await ctx.reply('❌ Некорректный email. Пожалуйста, введите корректный email (например: team@example.com) или отправьте /cancel для отмены.');
+                    return;
+                }
+                
+                log.info(`[Team Info] Chat ${chatId} - email accepted: ${email}`);
+                setConversationState(chatId, 'team_info_phone', { 
+                    team_name: state.data.team_name,
+                    captain_name: state.data.captain_name,
+                    email 
+                });
+                
+                await ctx.reply(
+                    `✅ Email: ${email}\n\n` +
+                    '📝 Шаг 4/4: Введите номер телефона капитана:\n' +
+                    'Можно в любом формате: +79991234567, 8-999-123-45-67, 9991234567'
+                );
+            } else if (state.step === 'team_info_phone') {
+                const normalizedPhone = validateAndNormalizePhone(text);
+                if (!normalizedPhone) {
+                    await ctx.reply('❌ Некорректный номер телефона. Пожалуйста, введите корректный номер (например: +79991234567 или 89991234567) или отправьте /cancel для отмены.');
+                    return;
+                }
+                
+                log.info(`[Team Info] Chat ${chatId} - phone accepted: ${normalizedPhone}`);
+                
+                const teamInfo: TeamInfo = {
+                    team_name: state.data.team_name,
+                    captain_name: state.data.captain_name,
+                    email: state.data.email,
+                    phone: normalizedPhone
+                };
+                
+                clearConversationState(chatId);
+                
+                try {
+                    await saveTeamInfo(chatId, teamInfo);
+                    await ctx.reply(
+                        '✅ Информация о команде сохранена!\n\n' +
+                        `Название команды: ${teamInfo.team_name}\n` +
+                        `Капитан: ${teamInfo.captain_name}\n` +
+                        `Email: ${teamInfo.email}\n` +
+                        `Телефон: ${teamInfo.phone}\n\n` +
+                        'Для просмотра используйте /team_info\n' +
+                        'Для изменения — /team_info_edit'
+                    );
+                } catch (e) {
+                    log.error('[Team Info] Save error:', e);
+                    await ctx.reply('❌ Ошибка при сохранении данных. См. логи.');
                 }
             }
         } catch (e) {

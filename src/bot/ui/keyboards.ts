@@ -124,3 +124,43 @@ export function buildPollsByTypesDateFilterKeyboard(typesCount: number) {
     return kb;
 }
 
+export function buildPollSelectionKeyboard(polls: Array<{ poll_id: string; label: string; vote_count: number }>, selected: Set<string>) {
+    const kb = new InlineKeyboard();
+    for (const poll of polls) {
+        const emoji = selected.has(poll.poll_id) ? '✅' : '◻️';
+        const buttonId = createButtonId(poll.poll_id);
+        const buttonLabel = `${emoji} ${poll.label} (${poll.vote_count} 👤)`;
+        kb.text(buttonLabel, CB.REG_POLL_TOGGLE + buttonId).row();
+    }
+    if (selected.size > 0) {
+        kb.text(`✔️ Подтвердить выбор (${selected.size})`, CB.REG_POLL_CONFIRM);
+    }
+    return kb;
+}
+
+export function buildGameSelectionKeyboard(games: Array<{ external_id: string; title: string; date: string; venue: string; vote_count: number }>, selected: Set<string>) {
+    const kb = new InlineKeyboard();
+    for (const game of games) {
+        const emoji = selected.has(game.external_id) ? '✅' : '◻️';
+        const buttonId = createButtonId(game.external_id);
+        const label = `${emoji} ${game.title} ${game.date} (${game.vote_count} 👤)`;
+        kb.text(label, CB.REG_GAME_TOGGLE + buttonId).row();
+    }
+    if (selected.size > 0) {
+        kb.text(`🎮 Зарегистрировать (${selected.size})`, CB.REG_GAME_CONFIRM);
+    }
+    return kb;
+}
+
+export function buildRegisteredGamesKeyboard(games: Array<{ external_id: string; title: string; registered: boolean }>) {
+    const kb = new InlineKeyboard();
+    for (const game of games) {
+        const emoji = game.registered ? '📝' : '◻️';
+        const displayName = game.title.length > 30 ? game.title.substring(0, 27) + '...' : game.title;
+        const buttonId = createButtonId(game.external_id);
+        const callback = game.registered ? CB.REGISTERED_UNMARK : CB.REGISTERED_MARK;
+        kb.text(`${emoji} ${displayName}`, callback + buttonId).row();
+    }
+    return kb;
+}
+

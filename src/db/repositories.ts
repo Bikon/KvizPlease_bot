@@ -87,6 +87,7 @@ export async function findUpcomingGroups(daysAhead: number, allowedDistricts: st
                 SELECT 1 FROM chat_played_groups cpg WHERE cpg.group_key = base.group_key AND cpg.chat_id = $3
             ) as played,
             COUNT(*) as cnt,
+            SUM(CASE WHEN base.registered = true THEN 1 ELSE 0 END) as registered_count,
             EXISTS (
                 SELECT 1 FROM polls p WHERE p.group_key = base.group_key AND p.chat_id = $3
             ) AS polled_by_package,
@@ -202,6 +203,9 @@ export async function resetChatData(chatId: string): Promise<void> {
     
     // Удаляем опросы чата
     await pool.query('DELETE FROM polls WHERE chat_id=$1', [chatId]);
+    
+    // Удаляем информацию о команде
+    await pool.query('DELETE FROM team_info WHERE chat_id=$1', [chatId]);
 }
 
 export async function changeSourceUrl(chatId: string, newUrl: string): Promise<void> {
@@ -232,5 +236,116 @@ export async function listChatsWithSourceAndLastSync(): Promise<Array<{ chat_id:
           WHERE s.key = 'source_url'`
     );
     return r.rows;
+}
+
+// Team information management
+export interface TeamInfo {
+    team_name: string;
+    captain_name: string;
+    email: string;
+    phone: string;
+}
+
+export async function getTeamInfo(chatId: string): Promise<TeamInfo | null> {
+    const r = await pool.query(
+        'SELECT team_name, captain_name, email, phone FROM team_info WHERE chat_id=$1',
+        [chatId]
+    );
+    return r.rows[0] ?? null;
+}
+
+export async function saveTeamInfo(chatId: string, info: TeamInfo): Promise<void> {
+    await pool.query(
+        `INSERT INTO team_info (chat_id, team_name, captain_name, email, phone)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (chat_id) DO UPDATE 
+         SET team_name = EXCLUDED.team_name,
+             captain_name = EXCLUDED.captain_name,
+             email = EXCLUDED.email,
+             phone = EXCLUDED.phone,
+             updated_at = now()`,
+        [chatId, info.team_name, info.captain_name, info.email, info.phone]
+    );
+}
+
+export async function deleteTeamInfo(chatId: string): Promise<void> {
+    await pool.query('DELETE FROM team_info WHERE chat_id=$1', [chatId]);
+}
+
+// Registration management
+export async function markGameRegistered(chatId: string, externalId: string): Promise<void> {
+    await pool.query(
+        'UPDATE games SET registered = true, registered_at = now() WHERE chat_id = $1 AND external_id = $2',
+        [chatId, externalId]
+    );
+}
+
+export async function unmarkGameRegistered(chatId: string, externalId: string): Promise<void> {
+    await pool.query(
+        'UPDATE games SET registered = false, registered_at = null WHERE chat_id = $1 AND external_id = $2',
+        [chatId, externalId]
+    );
+}
+
+export async function markPollProcessedForRegistration(pollId: string): Promise<void> {
+    await pool.query(
+        'UPDATE polls SET processed_for_registration = true WHERE poll_id = $1',
+        [pollId]
+    );
+}
+
+// Poll analysis for registration
+export interface PollWithVotes {
+    poll_id: string;
+    message_id: number;
+    group_key: string | null;
+    created_at: string;
+    vote_count: number;
+}
+
+export async function findUnprocessedPollsWithVotes(chatId: string): Promise<PollWithVotes[]> {
+    const r = await pool.query(
+        `SELECT p.poll_id, p.message_id, p.group_key, p.created_at,
+                COUNT(DISTINCT pv.user_id) as vote_count
+         FROM polls p
+         LEFT JOIN poll_votes pv ON pv.poll_id = p.poll_id
+         WHERE p.chat_id = $1 
+           AND p.processed_for_registration = false
+         GROUP BY p.poll_id, p.message_id, p.group_key, p.created_at
+         HAVING COUNT(DISTINCT pv.user_id) > 0
+         ORDER BY p.created_at DESC`,
+        [chatId]
+    );
+    return r.rows;
+}
+
+export interface PollOptionVotes {
+    option_id: number;
+    game_external_id: string | null;
+    is_unavailable: boolean;
+    vote_count: number;
+}
+
+export async function getPollOptionVotes(pollId: string): Promise<PollOptionVotes[]> {
+    const r = await pool.query(
+        `SELECT po.option_id, po.game_external_id, po.is_unavailable,
+                COUNT(DISTINCT pv.user_id) as vote_count
+         FROM poll_options po
+         LEFT JOIN poll_votes pv ON pv.poll_id = po.poll_id 
+                                  AND po.option_id = ANY(pv.option_ids)
+         WHERE po.poll_id = $1
+         GROUP BY po.option_id, po.game_external_id, po.is_unavailable
+         ORDER BY vote_count DESC, po.option_id`,
+        [pollId]
+    );
+    return r.rows;
+}
+
+export async function getGameByExternalId(chatId: string, externalId: string) {
+    const r = await pool.query(
+        'SELECT * FROM games WHERE chat_id = $1 AND external_id = $2',
+        [chatId, externalId]
+    );
+    return r.rows[0] ?? null;
 }
 
