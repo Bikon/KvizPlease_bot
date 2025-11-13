@@ -136,7 +136,7 @@ export async function grabPageHtmlWithFilters(url: string) {
                 await setCheckbox(page, 'QpGameSearch[status][]', '1'); // есть места
 
                 // Нажимаем «Загрузить ещё» пока появляются новые карточки
-                const loadedCount = await page
+                const loadMoreResult = await page
                     .evaluate(async () => {
                         const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -167,7 +167,9 @@ export async function grabPageHtmlWithFilters(url: string) {
                         };
 
                         let prevCount = document.querySelectorAll('.schedule-column').length;
-                        for (let step = 0; step < 20; step++) {
+                        let stagnantIterations = 0;
+                        let iterations = 0;
+                        for (; iterations < 60; iterations++) {
                             const btn = pickButton();
                             if (!btn) break;
 
@@ -180,20 +182,27 @@ export async function grabPageHtmlWithFilters(url: string) {
 
                             const current = document.querySelectorAll('.schedule-column').length;
                             if (current <= prevCount) {
-                                break;
+                                stagnantIterations += 1;
+                                if (stagnantIterations >= 3) {
+                                    break;
+                                }
+                            } else {
+                                stagnantIterations = 0;
                             }
                             prevCount = current;
                         }
 
-                        return prevCount;
+                        return { count: prevCount, iterations };
                     })
                     .catch((err) => {
                         log.warn('[Scraper] Ошибка при загрузке дополнительных карточек', err);
                         return null;
                     });
 
-                if (loadedCount) {
-                    log.info(`[Scraper] Итоговое количество карточек после загрузки: ${loadedCount}`);
+                if (loadMoreResult) {
+                    log.info(
+                        `[Scraper] Итоговое количество карточек: ${loadMoreResult.count} (итераций загрузки: ${loadMoreResult.iterations})`
+                    );
                 }
 
                 const html = await page.content();
