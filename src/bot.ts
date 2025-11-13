@@ -67,7 +67,7 @@ import { parseDate, formatDateForDisplay, formatDateTimeForDisplay, validateDate
 import { isValidEmail, validateAndNormalizePhone } from './utils/patterns.js';
 import { setConversationState, getConversationState, clearConversationState } from './utils/conversationState.js';
 import { toggleSelectedType, getSelectedTypes, clearSelectedTypes } from './utils/selectedTypes.js';
-import { toggleSelectedPoll, getSelectedPolls, clearSelectedPolls, toggleSelectedGame, getSelectedGames, clearSelectedGames, setPollGameMapping, getPollGameMapping, clearAllRegistrationState } from './utils/registrationState.js';
+import { toggleSelectedPoll, getSelectedPolls, toggleSelectedGame, getSelectedGames, setPollGameMapping, getPollGameMapping, clearAllRegistrationState } from './utils/registrationState.js';
 import { registerForGame } from './services/registrationService.js';
 import type { DbGame } from './types.js';
 
