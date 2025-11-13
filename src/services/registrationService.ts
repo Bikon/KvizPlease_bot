@@ -67,11 +67,39 @@ export async function registerForGame(params: RegistrationParams): Promise<Regis
         
         await page.setViewport({ width: 1280, height: 1400 });
 
-        async function warmupNavigation() {
-            const warmupUrls = [
-                'https://moscow.quizplease.ru/',
-                'https://moscow.quizplease.ru/schedule',
-            ];
+        const targetOrigin = (() => {
+            const tryParse = (value: string) => {
+                const parsed = new URL(value);
+                return parsed.origin;
+            };
+            try {
+                return tryParse(gameUrl);
+            } catch (primaryError) {
+                try {
+                    const normalized = gameUrl.startsWith('http') ? gameUrl : `https://${gameUrl}`;
+                    return tryParse(normalized);
+                } catch (secondaryError) {
+                    const match = gameUrl.match(/([a-z0-9-]+\.quizplease\.ru)/i);
+                    if (match?.[1]) {
+                        return `https://${match[1].toLowerCase()}`;
+                    }
+                    log.warn('[Registration] Failed to parse gameUrl origin, falling back to default quizplease domain', {
+                        gameUrl,
+                        primaryError,
+                        secondaryError,
+                    });
+                    return 'https://quizplease.ru';
+                }
+            }
+        })();
+
+        async function warmupNavigation(origin: string) {
+            const warmupUrls = Array.from(
+                new Set([
+                    `${origin}/`,
+                    new URL('/schedule', origin).toString(),
+                ])
+            );
             for (const warmUrl of warmupUrls) {
                 try {
                     await page.goto(warmUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
@@ -102,7 +130,7 @@ export async function registerForGame(params: RegistrationParams): Promise<Regis
 
             if (antiBotDetected && attempt < maxAttempts) {
                 log.warn('[Registration] Anti-bot page detected, performing warm-up navigation before retry');
-                await warmupNavigation();
+                await warmupNavigation(targetOrigin);
                 continue;
             }
 
