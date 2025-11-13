@@ -34,6 +34,9 @@ const bot = createBot();
     { command: 'upcoming_by_dates', description: 'Будущие игры (по датам)' },
     { command: 'polls', description: 'Создать опросы' },
     { command: 'played', description: 'Управление статусом игр' },
+    { command: 'team_info', description: 'Информация о команде' },
+    { command: 'register_from_polls', description: 'Регистрация по опросам' },
+    { command: 'registered', description: 'Управление регистрациями' },
     { command: 'reset', description: 'Очистить все данные чата' },
   ]);
   

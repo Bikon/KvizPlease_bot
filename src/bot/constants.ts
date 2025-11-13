@@ -23,6 +23,14 @@ export const CB = {
     TYPES_MENU_RESTORE: 'types_menu_restore',
     TYPES_MENU_SHOW_LIST: 'types_menu_list',
     TYPES_MENU_SHOW_PACKS: 'types_menu_packs',
+    REG_POLL_TOGGLE: 'regpt:',
+    REG_POLL_CONFIRM: 'regpc',
+    REG_GAME_TOGGLE: 'reggt:',
+    REG_GAME_CONFIRM: 'reggc',
+    REGISTERED_MARK: 'regm:',
+    REGISTERED_UNMARK: 'regu:',
+    STATUS_MENU_PLAYED: 'status_played',
+    STATUS_MENU_REGISTERED: 'status_registered',
 } as const;
 
 export type CallbackPrefixes = typeof CB;

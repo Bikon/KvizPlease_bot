@@ -29,7 +29,7 @@ async function syncGamesInternal(chatId: string, sourceUrl: string): Promise<{ a
 
     const raw = parseQuizPlease(html, sourceUrl);
     
-    // Получаем исключенные типы для этого чата
+    // Получаем исключенные типы пакетов(игр) для этого чата
     const excludedTypes = new Set((await listExcludedTypes(chatId)).map(t => t.toLowerCase()));
 
     let ok = 0, skip = 0, excluded = 0;

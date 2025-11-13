@@ -57,7 +57,11 @@ export type DbGame = {
     source_url: string;
     created_at: Date;
     updated_at: Date;
+    last_seen_at: Date;
     excluded: boolean;
+    played: boolean;
+    registered: boolean;
+    registered_at: Date | null;
 };
 
 export type DbGameGroup = {

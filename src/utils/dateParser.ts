@@ -45,6 +45,13 @@ export function formatDateForDisplay(date: Date): string {
 }
 
 /**
+ * Formats a date and time for display (DD.MM HH:mm)
+ */
+export function formatDateTimeForDisplay(date: Date): string {
+    return dayjs(date).format('DD.MM HH:mm');
+}
+
+/**
  * Validates that endDate is after startDate
  */
 export function validateDateRange(startDate: Date, endDate: Date): boolean {

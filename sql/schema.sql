@@ -18,6 +18,8 @@ CREATE TABLE IF NOT EXISTS games (
     last_seen_at TIMESTAMPTZ DEFAULT now(),
     played BOOLEAN DEFAULT false,
     excluded BOOLEAN DEFAULT false,
+    registered BOOLEAN DEFAULT false,
+    registered_at TIMESTAMPTZ,
     UNIQUE(chat_id, external_id)
     );
 
@@ -32,6 +34,8 @@ CREATE TABLE IF NOT EXISTS polls (
     chat_id TEXT NOT NULL,
     message_id BIGINT NOT NULL,
     group_key TEXT,
+    title TEXT,
+    processed_for_registration BOOLEAN DEFAULT false,
     created_at TIMESTAMPTZ DEFAULT now()
 );
 
@@ -47,6 +51,7 @@ CREATE TABLE IF NOT EXISTS poll_votes (
     id BIGSERIAL PRIMARY KEY,
     poll_id TEXT NOT NULL REFERENCES polls(poll_id) ON DELETE CASCADE,
     user_id BIGINT NOT NULL,
+    user_name TEXT,
     option_ids INT[] NOT NULL,
     voted_at TIMESTAMPTZ DEFAULT now(),
     UNIQUE(poll_id, user_id)
@@ -92,4 +97,14 @@ CREATE TABLE IF NOT EXISTS chat_excluded_types (
     type_name TEXT NOT NULL,
     excluded_at TIMESTAMPTZ DEFAULT now(),
     PRIMARY KEY(chat_id, type_name)
+);
+
+CREATE TABLE IF NOT EXISTS team_info (
+    chat_id TEXT PRIMARY KEY,
+    team_name TEXT NOT NULL,
+    captain_name TEXT NOT NULL,
+    email TEXT NOT NULL,
+    phone TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
 );
