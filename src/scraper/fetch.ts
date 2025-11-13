@@ -1,236 +1,251 @@
+import crypto from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
+
 import puppeteer from 'puppeteer-extra';
-import type { Page } from 'puppeteer';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+import type { Browser, Page } from 'puppeteer';
 
 import { log } from '../utils/logger.js';
 
-const sleep = (ms: number) => new Promise<void>(res => setTimeout(res, ms));
+puppeteer.use(StealthPlugin());
 
-// Кликаем чекбоксы по name=value, если присутствуют на странице
-async function setCheckbox(page: Page, name: string, value: string) {
-    const sel = `input[type="checkbox"][name="${name}"][value="${value}"]`;
-    try {
-        const handle = await page.waitForSelector(sel, { timeout: 5_000 }).catch(() => null);
-        if (!handle) {
-            log.warn(`Checkbox не найден: ${sel}`);
-            return;
-        }
+const ANTI_BOT_PATTERNS = [
+    /подтвердите.*(не\s*робот|robot)/i,
+    /captcha/i,
+    /cloudflare/i,
+];
 
-        const wasChecked = await page.evaluate((el: HTMLInputElement) => el.checked, handle as any);
-        if (!wasChecked) {
-            const success = await page.evaluate((selector: string) => {
-                const el = document.querySelector<HTMLInputElement>(selector);
-                if (!el) return false;
-                if (el.checked) return true;
+const BROWSER_LAUNCH_ARGS = [
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-dev-shm-usage',
+    '--disable-notifications',
+    '--disable-blink-features=AutomationControlled',
+    '--ignore-certificate-errors',
+    '--ignore-certificate-errors-spki-list',
+    '--lang=ru-RU,ru',
+];
 
-                el.checked = true;
-                el.dispatchEvent(new Event('change', { bubbles: true }));
-                el.dispatchEvent(new Event('input', { bubbles: true }));
-                return el.checked;
-            }, sel);
+const NAV_TIMEOUT_MS = 90_000;
+const PAGE_TIMEOUT_MS = 45_000;
+const BROWSER_TIMEOUT_MS = 120_000;
+const MAX_BROWSER_ATTEMPTS = 3;
+const MAX_SCROLL_ITERATIONS = 120;
+const SCROLL_DELAY_MS = 800;
+const HTTP_TIMEOUT_MS = 25_000;
+const HTTP_RETRIES = 2;
 
-            if (!success) {
-                await (handle as any).click().catch(() => log.warn(`Не удалось кликнуть по чекбоксу: ${sel}`));
+const USER_AGENTS = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 13_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Safari/605.1.15',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0',
+];
+
+function randomUserAgent(): string {
+    return USER_AGENTS[crypto.randomInt(0, USER_AGENTS.length)];
+}
+
+function containsChallenge(html: string): boolean {
+    return ANTI_BOT_PATTERNS.some(pattern => pattern.test(html));
+}
+
+async function fetchViaHttp(url: string): Promise<string | null> {
+    let controller: AbortController | undefined;
+    for (let attempt = 1; attempt <= HTTP_RETRIES; attempt++) {
+        try {
+            controller = new AbortController();
+            const timeout = setTimeout(() => controller?.abort(), HTTP_TIMEOUT_MS);
+            const res = await fetch(url, {
+                signal: controller.signal,
+                headers: {
+                    'User-Agent': randomUserAgent(),
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                    'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+                    'Cache-Control': 'no-cache',
+                    'Pragma': 'no-cache',
+                    'Referer': url,
+                },
+            });
+            clearTimeout(timeout);
+
+            if (!res.ok) {
+                log.warn(`[Scraper] HTTP attempt ${attempt} failed with status ${res.status}`);
+                await delay(500 * attempt);
+                continue;
             }
-            await sleep(250);
+
+            const html = await res.text();
+            if (containsChallenge(html)) {
+                log.warn('[Scraper] HTTP response looks like an anti-bot challenge, switching to browser mode');
+                return null;
+            }
+            log.info('[Scraper] HTTP fetch succeeded without browser');
+            return html;
+        } catch (err) {
+            log.warn(`[Scraper] HTTP attempt ${attempt} failed`, err);
+            await delay(500 * attempt);
+        } finally {
+            controller?.abort();
         }
-    } catch (e) {
-        log.warn(`Ошибка при клике на чекбокс ${sel}:`, e);
+    }
+    return null;
+}
+
+async function autoScroll(page: Page): Promise<void> {
+    await page.evaluate(async () => {
+        await new Promise<void>(resolve => {
+            let totalHeight = 0;
+            const distance = 400;
+            const timer = window.setInterval(() => {
+                const { scrollHeight } = document.body;
+                window.scrollBy(0, distance);
+                totalHeight += distance;
+
+                if (totalHeight >= scrollHeight - window.innerHeight - 10) {
+                    window.clearInterval(timer);
+                    resolve();
+                }
+            }, 200);
+        });
+    });
+}
+
+async function clickLoadMore(page: Page): Promise<boolean> {
+    return page
+        .evaluate(() => {
+            const selectors = [
+                '.load-more-button',
+                '.schedule-more__button',
+                '.schedule-more button',
+                '.schedule-more a',
+            ];
+
+            const buttons = selectors
+                .map(selector => document.querySelector<HTMLElement>(selector))
+                .filter((btn): btn is HTMLElement => !!btn && btn.offsetParent !== null);
+
+            if (!buttons.length) {
+                const fallback = Array.from(document.querySelectorAll<HTMLElement>('button, a')).find(node => {
+                    const text = node.textContent?.toLowerCase() ?? '';
+                    return text.includes('загрузить ещё') || text.includes('показать ещё') || text.includes('показать больше');
+                });
+                if (fallback) {
+                    fallback.scrollIntoView({ block: 'center', behavior: 'auto' });
+                    fallback.click();
+                    return true;
+                }
+                return false;
+            }
+
+            const btn = buttons[0];
+            btn.scrollIntoView({ block: 'center', behavior: 'auto' });
+            btn.click();
+            return true;
+        })
+        .catch(err => {
+            log.warn('[Scraper] Failed to trigger load-more button', err);
+            return false;
+        });
+}
+
+async function ensureScheduleLoaded(page: Page): Promise<void> {
+    await page.waitForSelector('.schedule-column', { timeout: 30_000 });
+
+    let previousCount = await page.$$eval('.schedule-column', elements => elements.length);
+    let stagnantIterations = 0;
+
+    for (let iteration = 0; iteration < MAX_SCROLL_ITERATIONS; iteration++) {
+        const clicked = await clickLoadMore(page);
+        if (!clicked) {
+            await autoScroll(page);
+        }
+
+        await page.waitForNetworkIdle({ idleTime: 800, timeout: 25_000 }).catch(() => {});
+        await delay(SCROLL_DELAY_MS);
+
+        const currentCount = await page.$$eval('.schedule-column', elements => elements.length);
+        if (currentCount <= previousCount) {
+            stagnantIterations += 1;
+            if (stagnantIterations >= 4) {
+                log.info('[Scraper] No new schedule columns detected, stopping scroll loop');
+                break;
+            }
+        } else {
+            stagnantIterations = 0;
+            log.info(`[Scraper] schedule-column count increased: ${currentCount}`);
+        }
+        previousCount = currentCount;
     }
 }
 
-puppeteer.use(StealthPlugin());
-
-export async function grabPageHtmlWithFilters(url: string) {
-    const targetOrigin = (() => {
+async function gotoWithFallback(page: Page, targetUrl: string): Promise<boolean> {
+    const strategies: Array<'domcontentloaded' | 'load' | 'networkidle2'> = ['domcontentloaded', 'load', 'networkidle2'];
+    for (const strategy of strategies) {
         try {
-            return new URL(url).origin;
-        } catch {
-            return 'https://quizplease.ru';
+            log.info(`[Scraper] Navigating to ${targetUrl} (waitUntil=${strategy})`);
+            await page.goto(targetUrl, { waitUntil: strategy, timeout: NAV_TIMEOUT_MS });
+            return true;
+        } catch (err) {
+            log.warn(`[Scraper] Navigation failed for ${targetUrl} with waitUntil=${strategy}`, err);
+            await delay(1_000);
         }
-    })();
+    }
+    return false;
+}
 
-    async function warmup(page: Page) {
-        const warmupUrls = Array.from(
-            new Set([
-                targetOrigin,
-                `${targetOrigin}/schedule`,
-            ])
-        );
+async function fetchViaBrowser(url: string): Promise<string> {
+    let browser: Browser | null = null;
 
-        for (const warmUrl of warmupUrls) {
-            try {
-                log.info(`[Scraper] Warmup navigation: ${warmUrl}`);
-                await page.goto(warmUrl, { waitUntil: 'domcontentloaded', timeout: 45_000 });
-                await sleep(800);
-            } catch (err) {
-                log.warn(`[Scraper] Warmup failed for ${warmUrl}`, err);
+    for (let attempt = 1; attempt <= MAX_BROWSER_ATTEMPTS; attempt++) {
+        try {
+            log.info(`[Scraper] Browser fetch attempt ${attempt}`);
+            browser = await puppeteer.launch({
+                headless: 'shell',
+                timeout: BROWSER_TIMEOUT_MS,
+                args: BROWSER_LAUNCH_ARGS,
+            });
+
+            const page = await browser.newPage();
+            await page.setViewport({ width: 1280, height: 1400 });
+            await page.setUserAgent(randomUserAgent());
+            await page.setExtraHTTPHeaders({
+                'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+            });
+            page.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
+            page.setDefaultTimeout(PAGE_TIMEOUT_MS);
+
+            const navigated = await gotoWithFallback(page, url);
+            if (!navigated) {
+                throw new Error('Navigation failed for all waitUntil strategies');
             }
+
+            await ensureScheduleLoaded(page);
+
+            const html = await page.content();
+            if (containsChallenge(html)) {
+                throw new Error('Received anti-bot challenge page even after browser navigation');
+            }
+
+            log.info('[Scraper] Browser fetch succeeded');
+            return html;
+        } catch (err) {
+            log.error(`[Scraper] Browser attempt ${attempt} failed`, err);
+            if (attempt === MAX_BROWSER_ATTEMPTS) throw err;
+            await delay(1_500 * attempt);
+        } finally {
+            await browser?.close().catch(() => {});
+            browser = null;
         }
     }
 
-    async function gotoWithFallback(page: Page, targetUrl: string): Promise<boolean> {
-        const strategies: Array<'domcontentloaded' | 'load' | 'networkidle2'> = ['domcontentloaded', 'load', 'networkidle2'];
-        for (const strategy of strategies) {
-            try {
-                log.info(`[Scraper] Navigating to ${targetUrl} (waitUntil=${strategy})`);
-                await page.goto(targetUrl, { waitUntil: strategy, timeout: 90_000 });
-                return true;
-            } catch (err) {
-                log.warn(`[Scraper] Navigation failed for ${targetUrl} with waitUntil=${strategy}`, err);
-                await sleep(1_000);
-            }
-        }
-        return false;
+    throw new Error('Unable to fetch schedule via browser');
+}
+
+export async function grabPageHtmlWithFilters(url: string): Promise<string> {
+    const httpHtml = await fetchViaHttp(url);
+    if (httpHtml) {
+        return httpHtml;
     }
-
-    const browser = await puppeteer.launch({
-        headless: true,
-        timeout: 120_000,
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--ignore-certificate-errors',
-            '--ignore-certificate-errors-spki-list',
-        ],
-    });
-
-    let lastError: unknown;
-    try {
-        const page = await browser.newPage();
-        await page.setViewport({ width: 1280, height: 1400 });
-        await page.setUserAgent(
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        );
-        await page.setExtraHTTPHeaders({
-            'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
-        });
-        page.setDefaultNavigationTimeout(90_000);
-        page.setDefaultTimeout(45_000);
-
-        const maxAttempts = 4;
-        let warmedUp = false;
-        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-            try {
-                log.info(`[Scraper] Loading schedule page (attempt ${attempt})`);
-                let navigated = await gotoWithFallback(page, url);
-                if (!navigated && !warmedUp) {
-                    await warmup(page);
-                    warmedUp = true;
-                    navigated = await gotoWithFallback(page, url);
-                }
-                if (!navigated) {
-                    throw new Error('Navigation failed after fallback attempts');
-                }
-
-                // Иногда фильтр уже раскрыт, но если нет — пробуем кликнуть через evaluate, чтобы избежать разрыва контекста
-                const filterOpened = await page
-                    .evaluate(() => {
-                        const btn = document.querySelector<HTMLElement>('.schedule-filter-open');
-                        if (!btn) return false;
-                        btn.click();
-                        return true;
-                    })
-                    .catch((err) => {
-                        log.warn('[Scraper] Ошибка при попытке раскрыть фильтр', err);
-                        return false;
-                    });
-
-                if (filterOpened) {
-                    await sleep(400);
-                } else {
-                    log.warn('[Scraper] Кнопка открытия фильтра не найдена, возможно фильтр раскрыт по умолчанию');
-                }
-
-                await page
-                    .waitForSelector('.schedule-column', { timeout: 30_000, visible: true })
-                    .catch(async () => {
-                        const snapshot = await page.content();
-                        throw new Error(
-                            `Schedule column not found. Page title: ${await page.title()}\n${snapshot.slice(0, 500)}`
-                        );
-                    });
-
-                // Прокручиваем страницу и жмём «Загрузить ещё», пока появляются новые карточки
-                let previousCount = await page.$$eval('.schedule-column', (els) => els.length);
-                let stagnantIterations = 0;
-                for (let iteration = 0; iteration < 100; iteration++) {
-                    const clicked = await page
-                        .evaluate(() => {
-                            const selectors = [
-                                '.load-more-button',
-                                '.schedule-more__button',
-                                '.schedule-more button',
-                                '.schedule-more a',
-                            ];
-                            let btn: HTMLElement | null = null;
-                            for (const sel of selectors) {
-                                const candidate = document.querySelector<HTMLElement>(sel);
-                                if (
-                                    candidate &&
-                                    candidate.offsetParent !== null &&
-                                    window.getComputedStyle(candidate).display !== 'none'
-                                ) {
-                                    btn = candidate;
-                                    break;
-                                }
-                            }
-                            if (!btn) {
-                                btn = Array.from(document.querySelectorAll<HTMLElement>('button, a')).find((node) => {
-                                    const text = node.textContent?.toLowerCase() ?? '';
-                                    return (
-                                        text.includes('загрузить ещё') ||
-                                        text.includes('показать ещё') ||
-                                        text.includes('показать больше')
-                                    );
-                                }) ?? null;
-                            }
-                            if (!btn) return false;
-                            btn.scrollIntoView({ block: 'center', behavior: 'auto' });
-                            btn.click();
-                            return true;
-                        })
-                        .catch((err) => {
-                            log.warn('[Scraper] Ошибка при попытке нажать кнопку «Загрузить ещё»', err);
-                            return false;
-                        });
-
-                    if (!clicked) {
-                        log.info('[Scraper] Кнопка «Загрузить ещё» не найдена, завершаем загрузку');
-                        break;
-                    }
-
-                    await page.waitForNetworkIdle({ idleTime: 1_000, timeout: 25_000 }).catch(() => {});
-                    await sleep(800);
-
-                    const currentCount = await page.$$eval('.schedule-column', (els) => els.length).catch(() => previousCount);
-                    if (currentCount <= previousCount) {
-                        stagnantIterations += 1;
-                        if (stagnantIterations >= 4) {
-                            log.info('[Scraper] Новых карточек не появляется, выходим из цикла загрузки');
-                            break;
-                        }
-                    } else {
-                        stagnantIterations = 0;
-                        log.info(`[Scraper] Загружено карточек: ${currentCount} (итерация ${iteration + 1})`);
-                    }
-                    previousCount = currentCount;
-
-                    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-                }
-
-                const html = await page.content();
-                log.info('[Scraper] HTML grabbed (prefiltered URL) & full list loaded');
-                return html;
-            } catch (err) {
-                lastError = err;
-                log.warn(`[Scraper] Ошибка на попытке ${attempt}:`, err);
-                if (attempt === maxAttempts) break;
-                await sleep(1_500);
-            }
-        }
-        throw lastError ?? new Error('grabPageHtmlWithFilters failed without explicit error');
-    } finally {
-        await browser.close();
-    }
+    return fetchViaBrowser(url);
 }
