@@ -61,7 +61,7 @@ export async function grabPageHtmlWithFilters(url: string) {
         for (const warmUrl of warmupUrls) {
             try {
                 log.info(`[Scraper] Warmup navigation: ${warmUrl}`);
-                await page.goto(warmUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+                await page.goto(warmUrl, { waitUntil: 'domcontentloaded', timeout: 45_000 });
                 await sleep(800);
             } catch (err) {
                 log.warn(`[Scraper] Warmup failed for ${warmUrl}`, err);
@@ -69,8 +69,19 @@ export async function grabPageHtmlWithFilters(url: string) {
         }
     }
 
+    async function gotoWithFallback(page: Page, targetUrl: string): Promise<boolean> {
+        try {
+            await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 90_000 });
+            return true;
+        } catch (err) {
+            log.warn(`[Scraper] Navigation failed for ${targetUrl}`, err);
+            return false;
+        }
+    }
+
     const browser = await puppeteer.launch({
         headless: true,
+        timeout: 120_000,
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
@@ -89,16 +100,23 @@ export async function grabPageHtmlWithFilters(url: string) {
         await page.setExtraHTTPHeaders({
             'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
         });
+        page.setDefaultNavigationTimeout(90_000);
+        page.setDefaultTimeout(45_000);
 
-        const maxAttempts = 3;
+        const maxAttempts = 4;
+        let warmedUp = false;
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
             try {
-                if (attempt > 1) {
-                    await warmup(page);
-                }
-
                 log.info(`[Scraper] Loading schedule page (attempt ${attempt})`);
-                await page.goto(url, { waitUntil: 'networkidle2', timeout: 60_000 });
+                let navigated = await gotoWithFallback(page, url);
+                if (!navigated && !warmedUp) {
+                    await warmup(page);
+                    warmedUp = true;
+                    navigated = await gotoWithFallback(page, url);
+                }
+                if (!navigated) {
+                    throw new Error('Navigation failed after fallback attempts');
+                }
 
                 // Иногда фильтр уже раскрыт, но если нет — пробуем кликнуть через evaluate, чтобы избежать разрыва контекста
                 const filterOpened = await page
