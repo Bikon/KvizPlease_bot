@@ -61,7 +61,7 @@ export async function grabPageHtmlWithFilters(url: string) {
         for (const warmUrl of warmupUrls) {
             try {
                 log.info(`[Scraper] Warmup navigation: ${warmUrl}`);
-                await page.goto(warmUrl, { waitUntil: 'domcontentloaded', timeout: 45_000 });
+                await page.goto(warmUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
                 await sleep(800);
             } catch (err) {
                 log.warn(`[Scraper] Warmup failed for ${warmUrl}`, err);
@@ -71,7 +71,6 @@ export async function grabPageHtmlWithFilters(url: string) {
 
     const browser = await puppeteer.launch({
         headless: true,
-        timeout: 120_000,
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
@@ -84,8 +83,6 @@ export async function grabPageHtmlWithFilters(url: string) {
     try {
         const page = await browser.newPage();
         await page.setViewport({ width: 1280, height: 1400 });
-        page.setDefaultNavigationTimeout(90_000);
-        page.setDefaultTimeout(45_000);
         await page.setUserAgent(
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         );
@@ -94,21 +91,14 @@ export async function grabPageHtmlWithFilters(url: string) {
         });
 
         const maxAttempts = 3;
-        let warmupDone = false;
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
             try {
-                if (!warmupDone && attempt > 1) {
+                if (attempt > 1) {
                     await warmup(page);
-                    warmupDone = true;
                 }
 
                 log.info(`[Scraper] Loading schedule page (attempt ${attempt})`);
-                try {
-                    await page.goto(url, { waitUntil: 'networkidle2', timeout: 90_000 });
-                } catch (navErr) {
-                    log.warn('[Scraper] Navigation timeout on networkidle2, retrying with domcontentloaded', navErr);
-                    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 90_000 });
-                }
+                await page.goto(url, { waitUntil: 'networkidle2', timeout: 60_000 });
 
                 // Иногда фильтр уже раскрыт, но если нет — пробуем кликнуть через evaluate, чтобы избежать разрыва контекста
                 const filterOpened = await page
