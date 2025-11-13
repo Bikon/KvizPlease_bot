@@ -42,67 +42,99 @@ async function setCheckbox(page: Page, name: string, value: string) {
 puppeteer.use(StealthPlugin());
 
 export async function grabPageHtmlWithFilters(url: string) {
-    // В последних версиях puppeteer поле headless либо boolean, либо "shell".
     const browser = await puppeteer.launch({
         headless: true,
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
             '--ignore-certificate-errors',
-            '--ignore-certificate-errors-spki-list'
+            '--ignore-certificate-errors-spki-list',
         ],
     });
-    const page = await browser.newPage();
-    await page.setViewport({ width: 1280, height: 1400 });
-    await page.setUserAgent(
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    );
-    await page.setExtraHTTPHeaders({
-        'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
-    });
 
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 60_000 });
+    let lastError: unknown;
+    try {
+        const page = await browser.newPage();
+        await page.setViewport({ width: 1280, height: 1400 });
+        await page.setUserAgent(
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        );
+        await page.setExtraHTTPHeaders({
+            'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+        });
 
-    const filterButton = await page.$('.schedule-filter-open');
-    if (filterButton) {
-        await (filterButton as any).click().catch(() => log.warn('Не удалось кликнуть по кнопке открытия фильтра'));
-        await sleep(300);
-    } else {
-        log.warn('Кнопка открытия фильтра не найдена, возможно фильтр раскрыт по умолчанию');
+        const maxAttempts = 3;
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                log.info(`[Scraper] Loading schedule page (attempt ${attempt})`);
+                await page.goto(url, { waitUntil: 'networkidle2', timeout: 60_000 });
+
+                // Иногда фильтр уже раскрыт, но если нет — пробуем кликнуть через evaluate, чтобы избежать разрыва контекста
+                const filterOpened = await page
+                    .evaluate(() => {
+                        const btn = document.querySelector<HTMLElement>('.schedule-filter-open');
+                        if (!btn) return false;
+                        btn.click();
+                        return true;
+                    })
+                    .catch((err) => {
+                        log.warn('[Scraper] Ошибка при попытке раскрыть фильтр', err);
+                        return false;
+                    });
+
+                if (filterOpened) {
+                    await page.waitForTimeout(400);
+                } else {
+                    log.warn('[Scraper] Кнопка открытия фильтра не найдена, возможно фильтр раскрыт по умолчанию');
+                }
+
+                await page
+                    .waitForSelector('.schedule-column', { timeout: 30_000, visible: true })
+                    .catch(async () => {
+                        const snapshot = await page.content();
+                        throw new Error(
+                            `Schedule column not found. Page title: ${await page.title()}\n${snapshot.slice(0, 500)}`
+                        );
+                    });
+
+                // Фильтры
+                await setCheckbox(page, 'QpGameSearch[format][]', '0'); // офлайн
+                for (const v of ['1', '5', '2', '9']) {                 // типы
+                    await setCheckbox(page, 'QpGameSearch[type][]', v);
+                }
+                await setCheckbox(page, 'QpGameSearch[status][]', '1'); // есть места
+
+                // Нажимаем «Загрузить ещё» пока видно
+                while (true) {
+                    const moreDiv = await page.$('.load-more-button');
+                    if (!moreDiv) break;
+
+                    const visible = await page
+                        .evaluate((el: Element) => {
+                            const s = window.getComputedStyle(el as HTMLElement);
+                            return s && s.display !== 'none' && s.visibility !== 'hidden';
+                        }, moreDiv as any)
+                        .catch(() => false);
+
+                    if (!visible) break;
+
+                    await moreDiv.click().catch((err) => log.warn('[Scraper] Не удалось нажать "Загрузить ещё"', err));
+                    await page.waitForNetworkIdle({ idleTime: 800, timeout: 15_000 }).catch(() => {});
+                    await sleep(500);
+                }
+
+                const html = await page.content();
+                log.info('[Scraper] HTML grabbed (prefiltered URL) & full list loaded');
+                return html;
+            } catch (err) {
+                lastError = err;
+                log.warn(`[Scraper] Ошибка на попытке ${attempt}:`, err);
+                if (attempt === maxAttempts) break;
+                await page.waitForTimeout(1_500);
+            }
+        }
+        throw lastError ?? new Error('grabPageHtmlWithFilters failed without explicit error');
+    } finally {
+        await browser.close();
     }
-
-    await page.waitForSelector('.schedule-column', { timeout: 25_000 }).catch(async () => {
-        const snapshot = await page.content();
-        log.warn('Не удалось найти расписание после загрузки страницы, возвращаем текущий HTML для анализа');
-        throw new Error(`Schedule column not found. Page title: ${await page.title()}\n${snapshot.slice(0, 500)}`);
-    });
-
-    // Фильтры
-    await setCheckbox(page, 'QpGameSearch[format][]', '0'); // офлайн
-    for (const v of ['1', '5', '2', '9']) {                 // типы
-        await setCheckbox(page, 'QpGameSearch[type][]', v);
-    }
-    await setCheckbox(page, 'QpGameSearch[status][]', '1'); // есть места
-
-    // Нажимаем «Загрузить ещё» пока видно
-    while (true) {
-        const moreDiv = await page.$('.load-more-button');
-        if (!moreDiv) break;
-
-        const visible = await page.evaluate((el: Element) => {
-            const s = window.getComputedStyle(el as HTMLElement);
-            return s && s.display !== 'none' && s.visibility !== 'hidden';
-        }, moreDiv as any);
-
-        if (!visible) break;
-
-        await (moreDiv as any).click();
-        await page.waitForNetworkIdle({ idleTime: 800, timeout: 15_000 }).catch(() => {});
-        await sleep(500);
-    }
-
-    const html = await page.content();
-    await browser.close();
-    log.info('HTML grabbed (prefiltered URL) & full list loaded');
-    return html;
 }
