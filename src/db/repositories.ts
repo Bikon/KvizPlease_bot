@@ -168,6 +168,11 @@ export async function mapPollOption(pollId: string, optionId: number, gameExtern
     );
 }
 
+export async function pollExists(pollId: string): Promise<boolean> {
+    const res = await pool.query('SELECT 1 FROM polls WHERE poll_id = $1 LIMIT 1', [pollId]);
+    return res.rowCount > 0;
+}
+
 export async function upsertVote(pollId: string, userId: number, optionIds: number[], userName: string | null) {
     await ensurePollVotesUserNameColumn();
     await pool.query(
