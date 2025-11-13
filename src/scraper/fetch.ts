@@ -130,7 +130,7 @@ export async function grabPageHtmlWithFilters(url: string) {
                 lastError = err;
                 log.warn(`[Scraper] Ошибка на попытке ${attempt}:`, err);
                 if (attempt === maxAttempts) break;
-                await page.waitForTimeout(1_500);
+                await sleep(1_500);
             }
         }
         throw lastError ?? new Error('grabPageHtmlWithFilters failed without explicit error');
