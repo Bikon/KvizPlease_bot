@@ -83,7 +83,7 @@ export async function grabPageHtmlWithFilters(url: string) {
                     });
 
                 if (filterOpened) {
-                    await page.waitForTimeout(400);
+                    await sleep(400);
                 } else {
                     log.warn('[Scraper] Кнопка открытия фильтра не найдена, возможно фильтр раскрыт по умолчанию');
                 }
