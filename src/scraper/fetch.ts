@@ -135,23 +135,54 @@ export async function grabPageHtmlWithFilters(url: string) {
                 }
                 await setCheckbox(page, 'QpGameSearch[status][]', '1'); // есть места
 
-                // Нажимаем «Загрузить ещё» пока видно
+                // Нажимаем «Загрузить ещё» пока появляются новые карточки
+                let previousCount = await page.$$eval('.schedule-column', (els) => els.length);
                 while (true) {
-                    const moreDiv = await page.$('.load-more-button');
-                    if (!moreDiv) break;
+                    const clicked = await page
+                        .evaluate(() => {
+                            const selectors = [
+                                '.load-more-button',
+                                '.schedule-more__button',
+                                '.schedule-more button',
+                                '.schedule-more a',
+                            ];
+                            let el: HTMLElement | null = null;
+                            for (const sel of selectors) {
+                                el = document.querySelector<HTMLElement>(sel);
+                                if (el) break;
+                            }
+                            if (!el) {
+                                el = Array.from(document.querySelectorAll<HTMLElement>('button, a')).find((node) => {
+                                    const text = node.textContent?.toLowerCase() || '';
+                                    return text.includes('загрузить ещё') || text.includes('показать ещё');
+                                }) ?? null;
+                            }
+                            if (!el) return false;
+                            el.scrollIntoView({ block: 'center', behavior: 'instant' });
+                            el.click();
+                            return true;
+                        })
+                        .catch((err) => {
+                            log.warn('[Scraper] Ошибка при поиске кнопки "Загрузить ещё"', err);
+                            return false;
+                        });
 
-                    const visible = await page
-                        .evaluate((el: Element) => {
-                            const s = window.getComputedStyle(el as HTMLElement);
-                            return s && s.display !== 'none' && s.visibility !== 'hidden';
-                        }, moreDiv as any)
-                        .catch(() => false);
+                    if (!clicked) break;
 
-                    if (!visible) break;
+                    const loaded = await page
+                        .$eval('.schedule-column:last-child', (el) => el.id)
+                        .catch(() => null);
 
-                    await moreDiv.click().catch((err) => log.warn('[Scraper] Не удалось нажать "Загрузить ещё"', err));
                     await page.waitForNetworkIdle({ idleTime: 800, timeout: 15_000 }).catch(() => {});
-                    await sleep(500);
+                    await sleep(700);
+
+                    const currentCount = await page.$$eval('.schedule-column', (els) => els.length);
+                    if (currentCount <= previousCount) {
+                        log.info('[Scraper] Новых карточек не появилось, прекращаем загрузку');
+                        break;
+                    }
+                    previousCount = currentCount;
+                    log.info(`[Scraper] Загружено карточек: ${currentCount}${loaded ? ` (last id: ${loaded})` : ''}`);
                 }
 
                 const html = await page.content();
