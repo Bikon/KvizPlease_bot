@@ -135,74 +135,72 @@ export async function grabPageHtmlWithFilters(url: string) {
                 }
                 await setCheckbox(page, 'QpGameSearch[status][]', '1'); // есть места
 
-                // Нажимаем «Загрузить ещё» пока появляются новые карточки
-                const loadMoreResult = await page
-                    .evaluate(async () => {
-                        const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-
-                        const pickButton = (): HTMLElement | null => {
+                // Прокручиваем страницу и жмём «Загрузить ещё», пока появляются новые карточки
+                let previousCount = await page.$$eval('.schedule-column', (els) => els.length);
+                let stagnantIterations = 0;
+                for (let iteration = 0; iteration < 100; iteration++) {
+                    const clicked = await page
+                        .evaluate(() => {
                             const selectors = [
                                 '.load-more-button',
                                 '.schedule-more__button',
                                 '.schedule-more button',
                                 '.schedule-more a',
                             ];
+                            let btn: HTMLElement | null = null;
                             for (const sel of selectors) {
                                 const candidate = document.querySelector<HTMLElement>(sel);
-                                if (candidate && candidate.offsetParent !== null) {
-                                    return candidate;
+                                if (
+                                    candidate &&
+                                    candidate.offsetParent !== null &&
+                                    window.getComputedStyle(candidate).display !== 'none'
+                                ) {
+                                    btn = candidate;
+                                    break;
                                 }
                             }
-                            const fallback = Array.from(document.querySelectorAll<HTMLElement>('button, a')).find(
-                                (node) => {
+                            if (!btn) {
+                                btn = Array.from(document.querySelectorAll<HTMLElement>('button, a')).find((node) => {
                                     const text = node.textContent?.toLowerCase() ?? '';
                                     return (
                                         text.includes('загрузить ещё') ||
                                         text.includes('показать ещё') ||
                                         text.includes('показать больше')
                                     );
-                                }
-                            );
-                            return fallback ?? null;
-                        };
-
-                        let prevCount = document.querySelectorAll('.schedule-column').length;
-                        let stagnantIterations = 0;
-                        let iterations = 0;
-                        for (; iterations < 60; iterations++) {
-                            const btn = pickButton();
-                            if (!btn) break;
-
-                            btn.scrollIntoView({ behavior: 'instant', block: 'center' });
-                            btn.click();
-
-                            await delay(1500);
-                            window.scrollTo(0, document.body.scrollHeight);
-                            await delay(400);
-
-                            const current = document.querySelectorAll('.schedule-column').length;
-                            if (current <= prevCount) {
-                                stagnantIterations += 1;
-                                if (stagnantIterations >= 3) {
-                                    break;
-                                }
-                            } else {
-                                stagnantIterations = 0;
+                                }) ?? null;
                             }
-                            prevCount = current;
+                            if (!btn) return false;
+                            btn.scrollIntoView({ block: 'center', behavior: 'auto' });
+                            btn.click();
+                            return true;
+                        })
+                        .catch((err) => {
+                            log.warn('[Scraper] Ошибка при попытке нажать кнопку «Загрузить ещё»', err);
+                            return false;
+                        });
+
+                    if (!clicked) {
+                        log.info('[Scraper] Кнопка «Загрузить ещё» не найдена, завершаем загрузку');
+                        break;
+                    }
+
+                    await page.waitForNetworkIdle({ idleTime: 1_000, timeout: 25_000 }).catch(() => {});
+                    await sleep(800);
+
+                    const currentCount = await page.$$eval('.schedule-column', (els) => els.length).catch(() => previousCount);
+                    if (currentCount <= previousCount) {
+                        stagnantIterations += 1;
+                        if (stagnantIterations >= 4) {
+                            log.info('[Scraper] Новых карточек не появляется, выходим из цикла загрузки');
+                            break;
                         }
+                    } else {
+                        stagnantIterations = 0;
+                        log.info(`[Scraper] Загружено карточек: ${currentCount} (итерация ${iteration + 1})`);
+                    }
+                    previousCount = currentCount;
 
-                        return { count: prevCount, iterations };
-                    })
-                    .catch((err) => {
-                        log.warn('[Scraper] Ошибка при загрузке дополнительных карточек', err);
-                        return null;
-                    });
-
-                if (loadMoreResult) {
-                    log.info(
-                        `[Scraper] Итоговое количество карточек: ${loadMoreResult.count} (итераций загрузки: ${loadMoreResult.iterations})`
-                    );
+                    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
                 }
 
                 const html = await page.content();
