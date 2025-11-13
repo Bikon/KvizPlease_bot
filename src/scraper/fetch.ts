@@ -42,6 +42,33 @@ async function setCheckbox(page: Page, name: string, value: string) {
 puppeteer.use(StealthPlugin());
 
 export async function grabPageHtmlWithFilters(url: string) {
+    const targetOrigin = (() => {
+        try {
+            return new URL(url).origin;
+        } catch {
+            return 'https://quizplease.ru';
+        }
+    })();
+
+    async function warmup(page: Page) {
+        const warmupUrls = Array.from(
+            new Set([
+                targetOrigin,
+                `${targetOrigin}/schedule`,
+            ])
+        );
+
+        for (const warmUrl of warmupUrls) {
+            try {
+                log.info(`[Scraper] Warmup navigation: ${warmUrl}`);
+                await page.goto(warmUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+                await sleep(800);
+            } catch (err) {
+                log.warn(`[Scraper] Warmup failed for ${warmUrl}`, err);
+            }
+        }
+    }
+
     const browser = await puppeteer.launch({
         headless: true,
         args: [
@@ -66,6 +93,10 @@ export async function grabPageHtmlWithFilters(url: string) {
         const maxAttempts = 3;
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
             try {
+                if (attempt > 1) {
+                    await warmup(page);
+                }
+
                 log.info(`[Scraper] Loading schedule page (attempt ${attempt})`);
                 await page.goto(url, { waitUntil: 'networkidle2', timeout: 60_000 });
 
