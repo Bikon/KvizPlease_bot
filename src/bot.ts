@@ -67,7 +67,7 @@ import { parseDate, formatDateForDisplay, formatDateTimeForDisplay, validateDate
 import { isValidEmail, validateAndNormalizePhone } from './utils/patterns.js';
 import { setConversationState, getConversationState, clearConversationState } from './utils/conversationState.js';
 import { toggleSelectedType, getSelectedTypes, clearSelectedTypes } from './utils/selectedTypes.js';
-import { toggleSelectedPoll, getSelectedPolls, clearSelectedPolls, toggleSelectedGame, getSelectedGames, clearSelectedGames, setPollGameMapping, getPollGameMapping, clearAllRegistrationState } from './utils/registrationState.js';
+import { toggleSelectedPoll, getSelectedPolls, toggleSelectedGame, getSelectedGames, setPollGameMapping, getPollGameMapping, clearAllRegistrationState } from './utils/registrationState.js';
 import { registerForGame } from './services/registrationService.js';
 import type { DbGame } from './types.js';
 
@@ -102,9 +102,10 @@ function formatRegisteredGame(g: DbGame, idx: number, voters: string[]): string 
     const address = rawAddress.replace(/\s*(Где это\?)\s*/i, '').replace(/\s{2,}/g, ' ').trim();
     const votersLine = voters.length ? `\n👥 ${voters.join(', ')}` : '';
 
-    const addressLine = address ? `\n${address}` : '';
+    const addressLine = address ? ` — ${address}` : '';
+    const scheduleLine = `${dd}.${mm}.${yyyy}, ${hh}:${mi}:00 — ${place}${address ? addressLine : ''}`;
 
-    return `${idx}. ${g.title}\n${dd}.${mm}.${yyyy}, ${hh}:${mi}:00 — ${place} — ${addressLine}\n${votersLine}\n`;
+    return `${idx}. ${g.title}\n${scheduleLine}\n${votersLine}\n`;
 }
 
 // Собираем текст порции и возвращаем nextOffset (если есть ещё)
