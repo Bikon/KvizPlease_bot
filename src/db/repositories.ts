@@ -7,11 +7,18 @@ import type { Game } from '../types.js';
 export { pool };
 
 let pollsTitleColumnEnsured = false;
+let pollVotesUserNameColumnEnsured = false;
 
 async function ensurePollTitleColumn() {
     if (pollsTitleColumnEnsured) return;
     await pool.query('ALTER TABLE polls ADD COLUMN IF NOT EXISTS title TEXT');
     pollsTitleColumnEnsured = true;
+}
+
+async function ensurePollVotesUserNameColumn() {
+    if (pollVotesUserNameColumnEnsured) return;
+    await pool.query('ALTER TABLE poll_votes ADD COLUMN IF NOT EXISTS user_name TEXT');
+    pollVotesUserNameColumnEnsured = true;
 }
 
 const upsertSqlPath = path.resolve(process.cwd(), 'sql', 'upsert_game.sql');
@@ -161,12 +168,13 @@ export async function mapPollOption(pollId: string, optionId: number, gameExtern
     );
 }
 
-export async function upsertVote(pollId: string, userId: number, optionIds: number[]) {
+export async function upsertVote(pollId: string, userId: number, optionIds: number[], userName: string | null) {
+    await ensurePollVotesUserNameColumn();
     await pool.query(
-        `INSERT INTO poll_votes (poll_id, user_id, option_ids)
-     VALUES ($1,$2,$3)
-     ON CONFLICT(poll_id, user_id) DO UPDATE SET option_ids = EXCLUDED.option_ids, voted_at = now()`,
-        [pollId, userId, optionIds]
+        `INSERT INTO poll_votes (poll_id, user_id, user_name, option_ids)
+     VALUES ($1,$2,$3,$4)
+     ON CONFLICT(poll_id, user_id) DO UPDATE SET option_ids = EXCLUDED.option_ids, user_name = EXCLUDED.user_name, voted_at = now()`,
+        [pollId, userId, userName, optionIds]
     );
 }
 
@@ -342,12 +350,15 @@ export interface PollOptionVotes {
     game_external_id: string | null;
     is_unavailable: boolean;
     vote_count: number;
+    voters: string[];
 }
 
 export async function getPollOptionVotes(pollId: string): Promise<PollOptionVotes[]> {
+    await ensurePollVotesUserNameColumn();
     const r = await pool.query(
         `SELECT po.option_id, po.game_external_id, po.is_unavailable,
-                COUNT(DISTINCT pv.user_id) as vote_count
+                COUNT(DISTINCT pv.user_id) as vote_count,
+                ARRAY_AGG(DISTINCT pv.user_name) FILTER (WHERE pv.user_name IS NOT NULL) AS voter_names
          FROM poll_options po
          LEFT JOIN poll_votes pv ON pv.poll_id = po.poll_id 
                                   AND po.option_id = ANY(pv.option_ids)
@@ -361,7 +372,34 @@ export async function getPollOptionVotes(pollId: string): Promise<PollOptionVote
         game_external_id: row.game_external_id,
         is_unavailable: row.is_unavailable,
         vote_count: Number(row.vote_count ?? 0),
+        voters: (row.voter_names ?? []).filter((name: string | null) => !!name) as string[],
     }));
+}
+
+export async function listRegistrationsByGame(chatId: string): Promise<Map<string, string[]>> {
+    await ensurePollVotesUserNameColumn();
+    const res = await pool.query(
+        `SELECT po.game_external_id,
+                ARRAY_AGG(DISTINCT pv.user_name) FILTER (WHERE pv.user_name IS NOT NULL) AS voter_names
+         FROM poll_options po
+         JOIN polls p ON p.poll_id = po.poll_id
+         LEFT JOIN poll_votes pv ON pv.poll_id = po.poll_id
+                                  AND po.option_id = ANY(pv.option_ids)
+         WHERE p.chat_id = $1
+           AND po.game_external_id IS NOT NULL
+         GROUP BY po.game_external_id`,
+        [chatId]
+    );
+    const map = new Map<string, string[]>();
+    for (const row of res.rows) {
+        const key = row.game_external_id as string | null;
+        if (!key) continue;
+        const names = (row.voter_names ?? []).filter((name: string | null) => !!name) as string[];
+        if (names.length) {
+            map.set(key, names);
+        }
+    }
+    return map;
 }
 
 export async function getGameByExternalId(chatId: string, externalId: string) {

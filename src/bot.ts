@@ -35,6 +35,7 @@ import {
     getPollOptionVotes,
     getTeamInfo,
     listExcludedTypes,
+    listRegistrationsByGame,
     markGameRegistered,
     markGroupPlayed,
     markPollProcessedForRegistration,
@@ -94,17 +95,30 @@ function formatGame(g: DbGame, idx: number): string {
     return `${idx}. ${g.title}\n${dd}.${mm}.${yyyy}, ${hh}:${mi}:00 — ${place} (-)\n${url}`;
 }
 
+function formatRegisteredGame(g: DbGame, idx: number, voters: string[]): string {
+    const { dd, mm, yyyy, hh, mi } = formatGameDateTime(g.date_time);
+    const place = g.venue ?? '-';
+    const rawAddress = g.address ?? '';
+    const address = rawAddress.replace(/\s*(Где это\?)\s*/i, '').replace(/\s{2,}/g, ' ').trim();
+    const votersLine = voters.length ? `\n👥 ${voters.join(', ')}` : '';
+
+    const addressLine = address ? `\n${address}` : '';
+
+    return `${idx}. ${g.title}\n${dd}.${mm}.${yyyy}, ${hh}:${mi}:00 — ${place} — ${addressLine}\n${votersLine}\n`;
+}
+
 // Собираем текст порции и возвращаем nextOffset (если есть ещё)
 function buildUpcomingChunk(
     games: DbGame[],
     offset: number,
-    limit: number
+    limit: number,
+    formatFn: (game: DbGame, idx: number) => string = formatGame
 ): { text: string; nextOffset: number | null } {
     const end = Math.min(offset + limit, games.length);
     const parts: string[] = [];
 
     for (let i = offset; i < end; i++) {
-        parts.push(formatGame(games[i], i + 1)); // сквозная нумерация
+        parts.push(formatFn(games[i], i + 1)); // сквозная нумерация
     }
 
     const text = parts.join('\n\n');
@@ -180,7 +194,17 @@ async function sendUpcoming(
         return;
     }
 
-    const { text, nextOffset } = buildUpcomingChunk(projected, offset, limit);
+    let registrantMap: Map<string, string[]> | null = null;
+    if (mode === 'registered') {
+        registrantMap = await listRegistrationsByGame(chatId);
+    }
+
+    const formatFn =
+        mode === 'registered'
+            ? (game: DbGame, idx: number) => formatRegisteredGame(game, idx, registrantMap?.get(game.external_id) ?? [])
+            : formatGame;
+
+    const { text, nextOffset } = buildUpcomingChunk(projected, offset, limit, formatFn);
     const header = offset === 0 ? `${UPCOMING_HEADERS[mode]}\n\n` : '';
     const message = `${header}${text}`;
     const keyboard = nextOffset !== null ? moreKeyboard(mode, nextOffset, limit) : undefined;

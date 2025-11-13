@@ -41,9 +41,12 @@ export async function postGroupPoll(bot: Bot, chatId: string | number, group: { 
 
 export async function handlePollAnswer(pollAnswer: any) {
     const pollId = pollAnswer.poll_id as string;
-    const userId = pollAnswer.user.id as number;
+    const user = pollAnswer.user;
+    const userId = user.id as number;
     const optionIds = pollAnswer.option_ids as number[];
-    await upsertVote(pollId, userId, optionIds);
+    const userNameParts = [user.username ? `@${user.username}` : null, user.first_name, user.last_name].filter(Boolean);
+    const displayName = userNameParts.join(' ') || `user_${userId}`;
+    await upsertVote(pollId, userId, optionIds, displayName);
 }
 
 export async function createPollsByDateRange(bot: Bot, chatId: string | number, games: any[], startDate: Date, endDate: Date): Promise<number> {

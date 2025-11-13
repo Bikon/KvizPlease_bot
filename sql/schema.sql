@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS poll_votes (
     id BIGSERIAL PRIMARY KEY,
     poll_id TEXT NOT NULL REFERENCES polls(poll_id) ON DELETE CASCADE,
     user_id BIGINT NOT NULL,
+    user_name TEXT,
     option_ids INT[] NOT NULL,
     voted_at TIMESTAMPTZ DEFAULT now(),
     UNIQUE(poll_id, user_id)
