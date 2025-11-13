@@ -67,7 +67,7 @@ import { parseDate, formatDateForDisplay, formatDateTimeForDisplay, validateDate
 import { isValidEmail, validateAndNormalizePhone } from './utils/patterns.js';
 import { setConversationState, getConversationState, clearConversationState } from './utils/conversationState.js';
 import { toggleSelectedType, getSelectedTypes, clearSelectedTypes } from './utils/selectedTypes.js';
-import { toggleSelectedPoll, getSelectedPolls, toggleSelectedGame, getSelectedGames, setPollGameMapping, getPollGameMapping, clearAllRegistrationState } from './utils/registrationState.js';
+import { toggleSelectedPoll, getSelectedPolls, clearSelectedPolls, toggleSelectedGame, getSelectedGames, clearSelectedGames, setPollGameMapping, getPollGameMapping, clearAllRegistrationState } from './utils/registrationState.js';
 import { registerForGame } from './services/registrationService.js';
 import type { DbGame } from './types.js';
 
@@ -324,6 +324,7 @@ export function createBot() {
             '/manage_status — пометить игры как сыгранные и управлять регистрациями.',
             '/team_info — информация о команде (просмотр/редактирование).',
             '/register_from_polls — проанализировать опросы и зарегистрироваться на игры.',
+            '/registered — управление статусами регистрации на игры.',
             '/cancel — отменить текущий диалог (например, ввод дат).',
             '/reset — полностью очистить все данные этого чата (источник, игры, настройки).'
         ].join('\n'));
@@ -648,24 +649,70 @@ export function createBot() {
 
     async function sendRegisteredKeyboard(ctx: Context) {
         const chatId = getChatId(ctx);
-        const games = await getFilteredUpcoming(chatId);
+        let games = await getFilteredUpcoming(chatId);
+
+        // Автоматически снимаем дубликаты регистрации по одному пакету
+        const seenGroupKeys = new Set<string>();
+        const duplicates: string[] = [];
+        for (const game of games) {
+            if (!game.registered) continue;
+            const key = game.group_key;
+            if (key) {
+                if (seenGroupKeys.has(key)) {
+                    duplicates.push(game.external_id);
+                } else {
+                    seenGroupKeys.add(key);
+                }
+            }
+        }
+        if (duplicates.length) {
+            for (const externalId of duplicates) {
+                await unmarkGameRegistered(chatId, externalId);
+            }
+            games = await getFilteredUpcoming(chatId);
+        }
         
         const registeredGames = games.filter(g => g.registered);
-        const allGames = games.map(g => ({
-            external_id: g.external_id,
-            title: g.title,
-            registered: g.registered || false
-        }));
+        const registeredGroupKeys = new Set(
+            registeredGames
+                .map((g) => g.group_key)
+                .filter((key): key is string => Boolean(key))
+        );
+
+        const allGames = games
+            .map(g => ({
+                external_id: g.external_id,
+                title: g.title,
+                registered: g.registered || false,
+                date_time: g.date_time,
+            group_key: g.group_key ?? null,
+            }))
+            .filter(game => {
+                if (game.registered) return true;
+                if (!game.group_key) return true;
+                return !registeredGroupKeys.has(game.group_key);
+            });
         
         if (allGames.length === 0) {
             return ctx.reply('Нет доступных игр.');
         }
         
         const kb = buildRegisteredGamesKeyboard(allGames);
+
+        const summaryLines = registeredGames.map((game, idx) => {
+            const { dd, mm, yyyy, hh, mi } = formatGameDateTime(game.date_time);
+            return `${idx + 1}. ${game.title}\n   ${dd}.${mm}.${yyyy} в ${hh}:${mi}`;
+        });
+
+        const summaryText = summaryLines.length
+            ? `\n\nТекущие регистрации:\n${summaryLines.join('\n')}\n`
+            : '\n\nРегистраций ещё нет.\n';
+
         await ctx.reply(
             `📝 Управление регистрациями\n\n` +
-            `Команда зарегистрирована на игр: ${registeredGames.length}\n\n` +
-            `Нажмите на игру, чтобы переключить статус регистрации:`,
+            `Команда зарегистрирована на игр: ${registeredGames.length}` +
+            summaryText +
+            `\nНажмите на игру, чтобы переключить статус регистрации:`,
             { reply_markup: kb }
         );
     }
@@ -675,7 +722,16 @@ export function createBot() {
         await sendPlayedKeyboard(ctx, { showNotice: true });
     });
 
+    bot.command('registered', async (ctx) => {
+        await ctx.reply('Команда /registered устарела. Используйте /manage_status → «Управлять регистрациями».');
+        await sendRegisteredKeyboard(ctx);
+    });
+
     bot.command('manage_status', async (ctx) => {
+        const arg = (ctx.match as string | undefined)?.trim() || '';
+        const limit = parseLimit(arg, 15); // for consistency if we reuse later
+        void limit;
+
         await ctx.reply(
             'Что вы хотите сделать?\n\n' +
             '🎮 Пометить «сыграно» — отметить пакеты как сыгранные/несыгранные.\n' +
@@ -762,7 +818,7 @@ export function createBot() {
                 
                 msg += '\n\n📖 Легенда:\n';
                 msg += '✅ — сыграно\n';
-                msg += '📝 — команда зарегистрирована на игру(ы)\n';
+                msg += '📝 — зарегистрировано на игру(ы)\n';
                 msg += '🗳 — опрос по пакету создан\n';
                 msg += '📅 — игра из пакета участвует в опросе по дате';
                 
@@ -1122,6 +1178,7 @@ export function createBot() {
                 // Collect all winning games from selected polls
                 const winningGames: Array<{ external_id: string; title: string; date: string; venue: string; vote_count: number; url: string }> = [];
                 const gameVoteMap = new Map<string, number>();
+                const upcomingGames = await getFilteredUpcoming(chatId);
                 
                 for (const pollId of selectedPolls) {
                     const optionVotes = await getPollOptionVotes(pollId);
@@ -1136,7 +1193,8 @@ export function createBot() {
                     for (const winner of winners) {
                         if (!winner.game_external_id) continue;
                         
-                        const game = await getGameByExternalId(chatId, winner.game_external_id);
+                        const preloadedGame = upcomingGames.find(g => g.external_id === winner.game_external_id);
+                        const game = preloadedGame ?? await getGameByExternalId(chatId, winner.game_external_id);
                         if (!game) continue;
                         
                         // Skip past games
@@ -1144,6 +1202,15 @@ export function createBot() {
                         
                         // Skip already registered games
                         if (game.registered) continue;
+                        
+                        if (game.group_key) {
+                            const groupAlreadyRegistered = upcomingGames.some(
+                                g => g.group_key === game.group_key && g.registered
+                            );
+                            if (groupAlreadyRegistered) continue;
+                        }
+                        
+                        if (winningGames.some(g => g.external_id === game.external_id)) continue;
                         
                         const { dd, mm, hh, mi } = formatGameDateTime(game.date_time);
                         winningGames.push({
@@ -1187,6 +1254,7 @@ export function createBot() {
                 const selectedPolls = getSelectedPolls(chatId);
                 const winningGames = [];
                 const gameVoteMap = new Map<string, number>();
+                const upcomingGames = await getFilteredUpcoming(chatId);
                 
                 for (const pollId of selectedPolls) {
                     const optionVotes = await getPollOptionVotes(pollId);
@@ -1196,8 +1264,15 @@ export function createBot() {
                     
                     for (const winner of winners) {
                         if (!winner.game_external_id) continue;
-                        const game = await getGameByExternalId(chatId, winner.game_external_id);
+                        const preloadedGame = upcomingGames.find(g => g.external_id === winner.game_external_id);
+                        const game = preloadedGame ?? await getGameByExternalId(chatId, winner.game_external_id);
                         if (!game || new Date(game.date_time) < new Date() || game.registered) continue;
+                        if (game.group_key) {
+                            const groupAlreadyRegistered = upcomingGames.some(
+                                g => g.group_key === game.group_key && g.registered
+                            );
+                            if (groupAlreadyRegistered) continue;
+                        }
                         
                         const { dd, mm, hh, mi } = formatGameDateTime(game.date_time);
                         winningGames.push({
@@ -1285,7 +1360,7 @@ export function createBot() {
                     `Успешно: ${registered}\n` +
                     `Ошибок: ${failed}\n\n` +
                     `${pollsSummary}\n\n` +
-                    `Используйте /manage_status для управления статусами регистрации.`
+                    `Используйте /registered для управления статусами регистрации.`
                 );
             } else if (data.startsWith(CB.REGISTERED_MARK)) {
                 const buttonId = data.slice(CB.REGISTERED_MARK.length);
@@ -1298,7 +1373,9 @@ export function createBot() {
                 const allGames = games.map(g => ({
                     external_id: g.external_id,
                     title: g.title,
-                    registered: g.registered || false
+                    registered: g.registered || false,
+                    date_time: g.date_time,
+                    group_key: g.group_key ?? null,
                 }));
                 
                 const kb = buildRegisteredGamesKeyboard(allGames);
@@ -1315,7 +1392,9 @@ export function createBot() {
                 const allGames = games.map(g => ({
                     external_id: g.external_id,
                     title: g.title,
-                    registered: g.registered || false
+                    registered: g.registered || false,
+                    date_time: g.date_time,
+                    group_key: g.group_key ?? null,
                 }));
                 
                 const kb = buildRegisteredGamesKeyboard(allGames);

@@ -291,6 +291,19 @@ export async function deleteTeamInfo(chatId: string): Promise<void> {
 
 // Registration management
 export async function markGameRegistered(chatId: string, externalId: string): Promise<void> {
+    const res = await pool.query<{ group_key: string | null }>(
+        'SELECT group_key FROM games WHERE chat_id = $1 AND external_id = $2',
+        [chatId, externalId]
+    );
+    const groupKey = res.rows[0]?.group_key;
+
+    if (groupKey) {
+        await pool.query(
+            'UPDATE games SET registered = false, registered_at = null WHERE chat_id = $1 AND group_key = $2 AND external_id <> $3',
+            [chatId, groupKey, externalId]
+        );
+    }
+
     await pool.query(
         'UPDATE games SET registered = true, registered_at = now() WHERE chat_id = $1 AND external_id = $2',
         [chatId, externalId]

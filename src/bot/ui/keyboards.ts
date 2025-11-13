@@ -3,6 +3,7 @@ import { InlineKeyboard } from 'grammy';
 import { CITIES } from '../cities.js';
 import { CB } from '../constants.js';
 import { createButtonId } from './buttonMapping.js';
+import { formatGameDateTime } from '../../utils/dateFormatter.js';
 
 export function moreKeyboard(mode: string, nextOffset: number, limit: number) {
     const kb = new InlineKeyboard();
@@ -160,14 +161,15 @@ export function buildGameSelectionKeyboard(games: Array<{ external_id: string; t
     return kb;
 }
 
-export function buildRegisteredGamesKeyboard(games: Array<{ external_id: string; title: string; registered: boolean }>) {
+export function buildRegisteredGamesKeyboard(games: Array<{ external_id: string; title: string; registered: boolean; date_time: Date; group_key: string | null }>) {
     const kb = new InlineKeyboard();
     for (const game of games) {
         const emoji = game.registered ? '📝' : '◻️';
         const displayName = game.title.length > 30 ? game.title.substring(0, 27) + '...' : game.title;
         const buttonId = createButtonId(game.external_id);
         const callback = game.registered ? CB.REGISTERED_UNMARK : CB.REGISTERED_MARK;
-        kb.text(`${emoji} ${displayName}`, callback + buttonId).row();
+        const { dd, mm, yyyy, hh, mi } = formatGameDateTime(game.date_time);
+        kb.text(`${emoji} ${displayName} • ${dd}.${mm}.${yyyy} ${hh}:${mi}`, callback + buttonId).row();
     }
     return kb;
 }
