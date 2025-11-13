@@ -128,13 +128,6 @@ export async function grabPageHtmlWithFilters(url: string) {
                         );
                     });
 
-                // Фильтры
-                await setCheckbox(page, 'QpGameSearch[format][]', '0'); // офлайн
-                for (const v of ['1', '5', '2', '9']) {                 // типы
-                    await setCheckbox(page, 'QpGameSearch[type][]', v);
-                }
-                await setCheckbox(page, 'QpGameSearch[status][]', '1'); // есть места
-
                 // Прокручиваем страницу и жмём «Загрузить ещё», пока появляются новые карточки
                 let previousCount = await page.$$eval('.schedule-column', (els) => els.length);
                 let stagnantIterations = 0;
