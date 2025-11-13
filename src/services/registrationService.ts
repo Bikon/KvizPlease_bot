@@ -130,7 +130,10 @@ export async function registerForGame(params: RegistrationParams): Promise<Regis
         // Helper to set text inputs reliably
         const setTextInput = async (selector: string, value: string) => {
             const exists = await page.waitForSelector(selector, { timeout: 15000 }).catch(() => null);
-            if (!exists) throw new Error(`Input not found: ${selector}`);
+            if (!exists) {
+                log.error(`[Registration] Input not found: ${selector}`);
+                return false;
+            }
             await page.evaluate(
                 (sel, v) => {
                     const el = document.querySelector<HTMLInputElement | HTMLTextAreaElement>(sel);
@@ -143,18 +146,24 @@ export async function registerForGame(params: RegistrationParams): Promise<Regis
                 selector,
                 value
             );
+            return true;
         };
         
-        await setTextInput('input[name="QpRecord[teamName]"]', teamInfo.team_name);
-        await setTextInput('input[name="QpRecord[captainName]"]', teamInfo.captain_name);
-        await setTextInput('input[name="QpRecord[email]"]', teamInfo.email);
-        await setTextInput('input[name="QpRecord[phone]"]', teamInfo.phone);
+        const inputSuccess =
+            (await setTextInput('input[name="QpRecord[teamName]"]', teamInfo.team_name)) &&
+            (await setTextInput('input[name="QpRecord[captainName]"]', teamInfo.captain_name)) &&
+            (await setTextInput('input[name="QpRecord[email]"]', teamInfo.email)) &&
+            (await setTextInput('input[name="QpRecord[phone]"]', teamInfo.phone));
+        if (!inputSuccess) {
+            return { success: false, error: 'Не удалось заполнить форму: не найдены обязательные поля' };
+        }
         
         // Number of players - select from dropdown (hidden select, so set via script)
         const playersSelector = 'select[name="QpRecord[count]"]';
         const playersSelectExists = await page.waitForSelector(playersSelector, { timeout: 8000 }).catch(() => null);
         if (!playersSelectExists) {
-            throw new Error(`Players select not found: ${playersSelector}`);
+            log.error(`[Registration] Players select not found: ${playersSelector}`);
+            return { success: false, error: 'Не удалось выбрать количество игроков — поле не найдено' };
         }
         await page.evaluate(
             (selector, value) => {
