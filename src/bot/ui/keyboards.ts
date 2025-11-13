@@ -4,9 +4,17 @@ import { CITIES } from '../cities.js';
 import { CB } from '../constants.js';
 import { createButtonId } from './buttonMapping.js';
 
-export function moreKeyboard(nextOffset: number, limit: number) {
+export function moreKeyboard(mode: string, nextOffset: number, limit: number) {
     const kb = new InlineKeyboard();
-    kb.text('Показать ещё', `more:upcoming:${nextOffset}:${limit}`);
+    kb.text('Показать ещё', `more:upcoming:${mode}:${nextOffset}:${limit}`);
+    return kb;
+}
+
+export function buildUpcomingModeKeyboard(limit: number) {
+    const kb = new InlineKeyboard();
+    kb.text('📦 По пакетам', `upcoming:packages:0:${limit}`).row();
+    kb.text('📅 По дате', `upcoming:dates:0:${limit}`).row();
+    kb.text('📝 Зарегистрированы', `upcoming:registered:0:${limit}`);
     return kb;
 }
 
@@ -111,9 +119,9 @@ export function buildRestoreTypesKeyboard(excludedTypes: string[]) {
 export function buildGameTypesMenuKeyboard() {
     const kb = new InlineKeyboard();
     kb.text('📦 Показать пакеты', CB.TYPES_MENU_SHOW_PACKS).row();
-    kb.text('🚫 Исключить типы', CB.TYPES_MENU_EXCLUDE).row();
-    kb.text('♻️ Восстановить типы', CB.TYPES_MENU_RESTORE).row();
-    kb.text('📋 Список исключённых', CB.TYPES_MENU_SHOW_LIST);
+    kb.text('🚫 Исключить типы пакетов (игр)', CB.TYPES_MENU_EXCLUDE).row();
+    kb.text('♻️ Восстановить типы пакетов (игр)', CB.TYPES_MENU_RESTORE).row();
+    kb.text('📋 Список исключённых пакетов', CB.TYPES_MENU_SHOW_LIST);
     return kb;
 }
 
@@ -161,6 +169,13 @@ export function buildRegisteredGamesKeyboard(games: Array<{ external_id: string;
         const callback = game.registered ? CB.REGISTERED_UNMARK : CB.REGISTERED_MARK;
         kb.text(`${emoji} ${displayName}`, callback + buttonId).row();
     }
+    return kb;
+}
+
+export function buildManageStatusMenuKeyboard() {
+    const kb = new InlineKeyboard();
+    kb.text('🎮 Пометить «сыграно»', CB.STATUS_MENU_PLAYED).row();
+    kb.text('📝 Управлять регистрациями', CB.STATUS_MENU_REGISTERED);
     return kb;
 }
 

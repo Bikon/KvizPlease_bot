@@ -29,6 +29,8 @@ export const CB = {
     REG_GAME_CONFIRM: 'reggc',
     REGISTERED_MARK: 'regm:',
     REGISTERED_UNMARK: 'regu:',
+    STATUS_MENU_PLAYED: 'status_played',
+    STATUS_MENU_REGISTERED: 'status_registered',
 } as const;
 
 export type CallbackPrefixes = typeof CB;

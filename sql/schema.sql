@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS polls (
     chat_id TEXT NOT NULL,
     message_id BIGINT NOT NULL,
     group_key TEXT,
+    title TEXT,
     processed_for_registration BOOLEAN DEFAULT false,
     created_at TIMESTAMPTZ DEFAULT now()
 );

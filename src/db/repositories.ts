@@ -6,6 +6,14 @@ import type { Game } from '../types.js';
 
 export { pool };
 
+let pollsTitleColumnEnsured = false;
+
+async function ensurePollTitleColumn() {
+    if (pollsTitleColumnEnsured) return;
+    await pool.query('ALTER TABLE polls ADD COLUMN IF NOT EXISTS title TEXT');
+    pollsTitleColumnEnsured = true;
+}
+
 const upsertSqlPath = path.resolve(process.cwd(), 'sql', 'upsert_game.sql');
 let UPSERT_SQL = '';
 (async () => { UPSERT_SQL = await fs.readFile(upsertSqlPath, 'utf8'); })();
@@ -138,10 +146,11 @@ export async function unexcludeType(chatId: string, typeName: string) {
     await pool.query(`DELETE FROM chat_excluded_types WHERE chat_id=$1 AND type_name=$2`, [chatId, typeName]);
 }
 
-export async function insertPoll(pollId: string, chatId: string, messageId: number, groupKey?: string) {
+export async function insertPoll(pollId: string, chatId: string, messageId: number, groupKey: string | null = null, title: string | null = null) {
+    await ensurePollTitleColumn();
     await pool.query(
-        'INSERT INTO polls (poll_id, chat_id, message_id, group_key) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING',
-        [pollId, chatId, messageId, groupKey ?? null]
+        'INSERT INTO polls (poll_id, chat_id, message_id, group_key, title) VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING',
+        [pollId, chatId, messageId, groupKey, title]
     );
 }
 
@@ -299,24 +308,33 @@ export interface PollWithVotes {
     poll_id: string;
     message_id: number;
     group_key: string | null;
+    title: string | null;
     created_at: string;
     vote_count: number;
 }
 
 export async function findUnprocessedPollsWithVotes(chatId: string): Promise<PollWithVotes[]> {
+    await ensurePollTitleColumn();
     const r = await pool.query(
-        `SELECT p.poll_id, p.message_id, p.group_key, p.created_at,
+        `SELECT p.poll_id, p.message_id, p.group_key, p.title, p.created_at,
                 COUNT(DISTINCT pv.user_id) as vote_count
          FROM polls p
          LEFT JOIN poll_votes pv ON pv.poll_id = p.poll_id
          WHERE p.chat_id = $1 
            AND p.processed_for_registration = false
-         GROUP BY p.poll_id, p.message_id, p.group_key, p.created_at
+         GROUP BY p.poll_id, p.message_id, p.group_key, p.title, p.created_at
          HAVING COUNT(DISTINCT pv.user_id) > 0
          ORDER BY p.created_at DESC`,
         [chatId]
     );
-    return r.rows;
+    return r.rows.map((row) => ({
+        poll_id: row.poll_id,
+        message_id: row.message_id,
+        group_key: row.group_key,
+        title: row.title,
+        created_at: row.created_at,
+        vote_count: Number(row.vote_count ?? 0),
+    }));
 }
 
 export interface PollOptionVotes {
@@ -338,7 +356,12 @@ export async function getPollOptionVotes(pollId: string): Promise<PollOptionVote
          ORDER BY vote_count DESC, po.option_id`,
         [pollId]
     );
-    return r.rows;
+    return r.rows.map((row) => ({
+        option_id: row.option_id,
+        game_external_id: row.game_external_id,
+        is_unavailable: row.is_unavailable,
+        vote_count: Number(row.vote_count ?? 0),
+    }));
 }
 
 export async function getGameByExternalId(chatId: string, externalId: string) {

@@ -1,6 +1,11 @@
-import puppeteer from 'puppeteer';
+import puppeteer from 'puppeteer-extra';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import type { TeamInfo } from '../db/repositories.js';
 import { log } from '../utils/logger.js';
+
+puppeteer.use(StealthPlugin());
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 export interface RegistrationParams {
     gameUrl: string;
@@ -60,11 +65,57 @@ export async function registerForGame(params: RegistrationParams): Promise<Regis
             });
         });
         
-        log.info(`[Registration] Navigating to: ${gameUrl}`);
-        await page.goto(gameUrl, { waitUntil: 'networkidle2', timeout: 30000 });
-        
-        // Wait a bit to simulate human behavior
-        await new Promise(resolve => setTimeout(resolve, 1500));
+        await page.setViewport({ width: 1280, height: 1400 });
+
+        async function warmupNavigation() {
+            const warmupUrls = [
+                'https://moscow.quizplease.ru/',
+                'https://moscow.quizplease.ru/schedule',
+            ];
+            for (const warmUrl of warmupUrls) {
+                try {
+                    await page.goto(warmUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+                    await sleep(1200);
+                } catch (err) {
+                    log.warn('[Registration] Warmup navigation failed:', err);
+                }
+            }
+        }
+
+        let formPresent: boolean | null = null;
+        let pageSnippet = '';
+        const maxAttempts = 3;
+
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            log.info(`[Registration] Navigating to: ${gameUrl} (attempt ${attempt})`);
+            await page.goto(gameUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+            await sleep(1500);
+
+            const formHandle = await page.waitForSelector('form#main-form', { timeout: 10000 }).catch(() => null);
+            if (formHandle) {
+                formPresent = true;
+                break;
+            }
+
+            pageSnippet = await page.evaluate(() => document.body.innerText.slice(0, 600));
+            const antiBotDetected = /запросы.*(не\s*робот|роботом)/i.test(pageSnippet);
+
+            if (antiBotDetected && attempt < maxAttempts) {
+                log.warn('[Registration] Anti-bot page detected, performing warm-up navigation before retry');
+                await warmupNavigation();
+                continue;
+            }
+
+            break;
+        }
+
+        if (!formPresent) {
+            if (!pageSnippet) {
+                pageSnippet = await page.evaluate(() => document.body.innerText.slice(0, 600));
+            }
+            log.error('[Registration] Registration form not found on page');
+            return { success: false, error: `Registration form not found on page. Snippet: ${pageSnippet}` };
+        }
         
         // Check for CAPTCHA
         const bodyText = await page.evaluate(() => document.body.textContent || '');
@@ -76,41 +127,91 @@ export async function registerForGame(params: RegistrationParams): Promise<Regis
         // Fill out the form
         log.info('[Registration] Filling out registration form');
         
-        // Team name
-        const teamNameSelector = 'input[name="team"]';
-        await page.waitForSelector(teamNameSelector, { timeout: 10000 });
-        await page.type(teamNameSelector, teamInfo.team_name, { delay: 100 });
+        // Helper to set text inputs reliably
+        const setTextInput = async (selector: string, value: string) => {
+            const exists = await page.waitForSelector(selector, { timeout: 15000 }).catch(() => null);
+            if (!exists) throw new Error(`Input not found: ${selector}`);
+            await page.evaluate(
+                (sel, v) => {
+                    const el = document.querySelector<HTMLInputElement | HTMLTextAreaElement>(sel);
+                    if (!el) return;
+                    el.focus();
+                    el.value = v;
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                },
+                selector,
+                value
+            );
+        };
         
-        // Captain name
-        const captainSelector = 'input[name="name"]';
-        await page.type(captainSelector, teamInfo.captain_name, { delay: 100 });
+        await setTextInput('input[name="QpRecord[teamName]"]', teamInfo.team_name);
+        await setTextInput('input[name="QpRecord[captainName]"]', teamInfo.captain_name);
+        await setTextInput('input[name="QpRecord[email]"]', teamInfo.email);
+        await setTextInput('input[name="QpRecord[phone]"]', teamInfo.phone);
         
-        // Email
-        const emailSelector = 'input[name="email"]';
-        await page.type(emailSelector, teamInfo.email, { delay: 100 });
-        
-        // Phone
-        const phoneSelector = 'input[name="phone"]';
-        await page.type(phoneSelector, teamInfo.phone, { delay: 100 });
-        
-        // Number of players - select from dropdown
-        const playersSelector = 'select[name="num"]';
-        await page.select(playersSelector, String(playerCount));
+        // Number of players - select from dropdown (hidden select, so set via script)
+        const playersSelector = 'select[name="QpRecord[count]"]';
+        const playersSelectExists = await page.waitForSelector(playersSelector, { timeout: 8000 }).catch(() => null);
+        if (!playersSelectExists) {
+            throw new Error(`Players select not found: ${playersSelector}`);
+        }
+        await page.evaluate(
+            (selector, value) => {
+                const el = document.querySelector<HTMLSelectElement>(selector);
+                if (!el) return;
+                el.value = value;
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+            },
+            playersSelector,
+            String(playerCount)
+        );
         
         log.info(`[Registration] Form filled with ${playerCount} players`);
         
-        // Check privacy policy checkbox
-        const privacyCheckboxSelector = 'input[name="privacy"]';
-        await page.click(privacyCheckboxSelector);
+        // Check privacy policy checkbox (required)
+        const ensureCheckbox = async (selector: string, description: string) => {
+            const exists = await page.$(selector);
+            if (!exists) {
+                log.warn(`[Registration] ${description} checkbox not found (selector: ${selector})`);
+                return;
+            }
+            await page.evaluate((sel) => {
+                const el = document.querySelector<HTMLInputElement>(sel);
+                if (!el) return;
+                el.checked = true;
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+            }, selector);
+        };
         
-        log.info('[Registration] Privacy policy checkbox checked');
+        await ensureCheckbox('input.agreement-checkbox__js', 'Privacy agreement');
+        await ensureCheckbox('input.mailing-checkbox__js', 'Mailing consent');
+        log.info('[Registration] Consent checkboxes set');
         
         // Small delay before submission
         await new Promise(resolve => setTimeout(resolve, 500));
         
         // Click the register button
         const registerButtonSelector = 'button[type="submit"]';
-        await page.click(registerButtonSelector);
+        const registerButton = await page.$(registerButtonSelector);
+        if (registerButton) {
+            await page.evaluate((selector) => {
+                const el = document.querySelector<HTMLButtonElement>(selector);
+                const form = el?.closest('form');
+                if (form && form instanceof HTMLFormElement && form.requestSubmit) {
+                    form.requestSubmit(el);
+                } else {
+                    el?.click();
+                }
+            }, registerButtonSelector);
+        } else {
+            log.warn('[Registration] Submit button not found, attempting form submit');
+            await page.evaluate(() => {
+                const form = document.querySelector<HTMLFormElement>('form#main-form');
+                form?.submit();
+            });
+        }
         
         log.info('[Registration] Registration button clicked, waiting for response...');
         

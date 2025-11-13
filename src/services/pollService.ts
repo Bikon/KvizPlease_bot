@@ -29,7 +29,7 @@ export async function postGroupPoll(bot: Bot, chatId: string | number, group: { 
         allows_multiple_answers: true,
     });
 
-    await insertPoll(msg.poll!.id, String(msg.chat.id), msg.message_id, group.groupKey);
+    await insertPoll(msg.poll!.id, String(msg.chat.id), msg.message_id, group.groupKey, msg.poll?.question ?? null);
 
     for (let i = 0; i < group.items.length; i++) {
         await mapPollOption(msg.poll!.id, i, group.items[i].external_id, false);
@@ -96,7 +96,7 @@ export async function createPollsByDateRange(bot: Bot, chatId: string | number, 
             allows_multiple_answers: true,
         });
         
-        await insertPoll(msg.poll!.id, String(msg.chat.id), msg.message_id);
+        await insertPoll(msg.poll!.id, String(msg.chat.id), msg.message_id, null, msg.poll?.question ?? null);
         
         for (let j = 0; j < chunk.length; j++) {
             await mapPollOption(msg.poll!.id, j, chunk[j].external_id, false);
