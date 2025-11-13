@@ -70,13 +70,18 @@ export async function grabPageHtmlWithFilters(url: string) {
     }
 
     async function gotoWithFallback(page: Page, targetUrl: string): Promise<boolean> {
-        try {
-            await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 90_000 });
-            return true;
-        } catch (err) {
-            log.warn(`[Scraper] Navigation failed for ${targetUrl}`, err);
-            return false;
+        const strategies: Array<'domcontentloaded' | 'load' | 'networkidle2'> = ['domcontentloaded', 'load', 'networkidle2'];
+        for (const strategy of strategies) {
+            try {
+                log.info(`[Scraper] Navigating to ${targetUrl} (waitUntil=${strategy})`);
+                await page.goto(targetUrl, { waitUntil: strategy, timeout: 90_000 });
+                return true;
+            } catch (err) {
+                log.warn(`[Scraper] Navigation failed for ${targetUrl} with waitUntil=${strategy}`, err);
+                await sleep(1_000);
+            }
         }
+        return false;
     }
 
     const browser = await puppeteer.launch({
