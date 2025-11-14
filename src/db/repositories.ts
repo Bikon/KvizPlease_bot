@@ -241,36 +241,50 @@ export async function setChatSetting(chatId: string, key: string, value: string)
 }
 
 export async function resetChatData(chatId: string): Promise<void> {
-    // Удаляем настройки чата
-    await pool.query('DELETE FROM chat_settings WHERE chat_id=$1', [chatId]);
-    
-    // Удаляем played groups чата
-    await pool.query('DELETE FROM chat_played_groups WHERE chat_id=$1', [chatId]);
-    
-    // Удаляем excluded types чата
-    await pool.query('DELETE FROM chat_excluded_types WHERE chat_id=$1', [chatId]);
-    
-    // Удаляем игры этого чата
-    await pool.query('DELETE FROM games WHERE chat_id=$1', [chatId]);
-    
-    // Удаляем опросы чата
-    await pool.query('DELETE FROM polls WHERE chat_id=$1', [chatId]);
-    
-    // Удаляем информацию о команде
-    await pool.query('DELETE FROM team_info WHERE chat_id=$1', [chatId]);
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        await client.query('DELETE FROM chat_settings WHERE chat_id=$1', [chatId]);
+        await client.query('DELETE FROM chat_played_groups WHERE chat_id=$1', [chatId]);
+        await client.query('DELETE FROM chat_excluded_types WHERE chat_id=$1', [chatId]);
+        await client.query('DELETE FROM games WHERE chat_id=$1', [chatId]);
+        await client.query('DELETE FROM polls WHERE chat_id=$1', [chatId]);
+        await client.query('DELETE FROM team_info WHERE chat_id=$1', [chatId]);
+        await client.query('COMMIT');
+    } catch (error) {
+        await client.query('ROLLBACK');
+        log.error(`[resetChatData] Transaction failed for chat ${chatId}:`, error);
+        throw error;
+    } finally {
+        client.release();
+    }
 }
 
 export async function changeSourceUrl(chatId: string, newUrl: string): Promise<void> {
-    // Очищаем все данные чата при смене источника
-    await pool.query('DELETE FROM chat_played_groups WHERE chat_id=$1', [chatId]);
-    await pool.query('DELETE FROM chat_excluded_types WHERE chat_id=$1', [chatId]);
-    await pool.query('DELETE FROM games WHERE chat_id=$1', [chatId]);
-    await pool.query('DELETE FROM polls WHERE chat_id=$1', [chatId]);
-    await pool.query('DELETE FROM chat_settings WHERE chat_id=$1 AND key=$2', [chatId, 'last_sync_at']);
-    await pool.query('DELETE FROM chat_settings WHERE chat_id=$1 AND key=$2', [chatId, 'pending_source_url']);
-    
-    // Устанавливаем новый источник
-    await setChatSetting(chatId, 'source_url', newUrl);
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        await client.query('DELETE FROM chat_played_groups WHERE chat_id=$1', [chatId]);
+        await client.query('DELETE FROM chat_excluded_types WHERE chat_id=$1', [chatId]);
+        await client.query('DELETE FROM games WHERE chat_id=$1', [chatId]);
+        await client.query('DELETE FROM polls WHERE chat_id=$1', [chatId]);
+        await client.query('DELETE FROM chat_settings WHERE chat_id=$1 AND key=$2', [chatId, 'last_sync_at']);
+        await client.query('DELETE FROM chat_settings WHERE chat_id=$1 AND key=$2', [chatId, 'pending_source_url']);
+        
+        // Устанавливаем новый источник
+        await client.query(
+            `INSERT INTO chat_settings(chat_id, key, value) VALUES ($1,$2,$3)
+             ON CONFLICT(chat_id, key) DO UPDATE SET value=EXCLUDED.value, updated_at=now()`,
+            [chatId, 'source_url', newUrl]
+        );
+        await client.query('COMMIT');
+    } catch (error) {
+        await client.query('ROLLBACK');
+        log.error(`[changeSourceUrl] Transaction failed for chat ${chatId}:`, error);
+        throw error;
+    } finally {
+        client.release();
+    }
 }
 
 export async function deletePastGames(chatId: string): Promise<number> {
@@ -326,23 +340,34 @@ export async function deleteTeamInfo(chatId: string): Promise<void> {
 
 // Registration management
 export async function markGameRegistered(chatId: string, externalId: string): Promise<void> {
-    const res = await pool.query<{ group_key: string | null }>(
-        'SELECT group_key FROM games WHERE chat_id = $1 AND external_id = $2',
-        [chatId, externalId]
-    );
-    const groupKey = res.rows[0]?.group_key;
-
-    if (groupKey) {
-        await pool.query(
-            'UPDATE games SET registered = false, registered_at = null WHERE chat_id = $1 AND group_key = $2 AND external_id <> $3',
-            [chatId, groupKey, externalId]
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+        const res = await client.query<{ group_key: string | null }>(
+            'SELECT group_key FROM games WHERE chat_id = $1 AND external_id = $2',
+            [chatId, externalId]
         );
-    }
+        const groupKey = res.rows[0]?.group_key;
 
-    await pool.query(
-        'UPDATE games SET registered = true, registered_at = now() WHERE chat_id = $1 AND external_id = $2',
-        [chatId, externalId]
-    );
+        if (groupKey) {
+            await client.query(
+                'UPDATE games SET registered = false, registered_at = null WHERE chat_id = $1 AND group_key = $2 AND external_id <> $3',
+                [chatId, groupKey, externalId]
+            );
+        }
+
+        await client.query(
+            'UPDATE games SET registered = true, registered_at = now() WHERE chat_id = $1 AND external_id = $2',
+            [chatId, externalId]
+        );
+        await client.query('COMMIT');
+    } catch (error) {
+        await client.query('ROLLBACK');
+        log.error(`[markGameRegistered] Transaction failed for chat ${chatId}, game ${externalId}:`, error);
+        throw error;
+    } finally {
+        client.release();
+    }
 }
 
 export async function unmarkGameRegistered(chatId: string, externalId: string): Promise<void> {

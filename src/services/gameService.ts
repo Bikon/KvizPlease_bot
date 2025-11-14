@@ -34,20 +34,25 @@ async function syncGamesInternal(chatId: string, sourceUrl: string): Promise<{ a
 
     let ok = 0, skip = 0, excluded = 0;
     for (const r of raw) {
-        const g = normalize(r);
-        if (!g) { skip++; continue; }
+        try {
+            const g = normalize(r);
+            if (!g) { skip++; continue; }
 
-        const { groupKey, typeName } = extractGroupKey(r.title);
-        g.groupKey = groupKey;
-        
-        // Пропускаем игры исключенных типов
-        if (excludedTypes.has(typeName.toLowerCase())) {
-            excluded++;
-            continue;
+            const { groupKey, typeName } = extractGroupKey(r.title);
+            g.groupKey = groupKey;
+            
+            // Пропускаем игры исключенных типов
+            if (excludedTypes.has(typeName.toLowerCase())) {
+                excluded++;
+                continue;
+            }
+
+            await upsertGame(g, chatId, sourceUrl);
+            ok++;
+        } catch (error) {
+            log.error(`[Sync] Failed to process game ${r.externalId}:`, error);
+            skip++;
         }
-
-        await upsertGame(g, chatId, sourceUrl);
-        ok++;
     }
     log.info(`[Chat ${chatId}] Synced games: ${ok}, excluded: ${excluded}, skipped: ${skip}`);
     return { added: ok, skipped: skip, excluded };

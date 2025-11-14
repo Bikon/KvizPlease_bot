@@ -49,6 +49,7 @@ import {
     unmarkGroupPlayed,
     type TeamInfo,
     type PollWithVotes,
+    type PollOptionVotes,
 } from './db/repositories.js';
 import {
     getFilteredUpcoming,
@@ -232,8 +233,59 @@ function truncateText(text: string, maxLength = 48): string {
 async function buildPollSelectionItems(chatId: string, polls: PollWithVotes[]) {
     const items: Array<{ poll_id: string; label: string; vote_count: number }> = [];
 
+    // Batch fetch all option votes to avoid N+1 queries
+    const pollIds = polls.map(p => p.poll_id);
+    const allOptionVotesMap = new Map<string, PollOptionVotes[]>();
+    
+    // Fetch all option votes in parallel
+    const optionVotesPromises = pollIds.map(async (pollId) => {
+        const votes = await getPollOptionVotes(pollId);
+        return { pollId, votes };
+    });
+    const optionVotesResults = await Promise.all(optionVotesPromises);
+    for (const { pollId, votes } of optionVotesResults) {
+        allOptionVotesMap.set(pollId, votes);
+    }
+
+    // Collect all unique game external IDs to batch fetch games
+    const gameExternalIds = new Set<string>();
     for (const poll of polls) {
-        const optionVotes = await getPollOptionVotes(poll.poll_id);
+        const optionVotes = allOptionVotesMap.get(poll.poll_id) || [];
+        const validOptions = optionVotes.filter((opt) => !opt.is_unavailable && opt.vote_count >= 2);
+        if (validOptions.length > 0) {
+            const maxVotes = Math.max(...validOptions.map((opt) => opt.vote_count));
+            const winners = validOptions.filter((opt) => opt.vote_count === maxVotes);
+            for (const winner of winners) {
+                if (winner.game_external_id) {
+                    gameExternalIds.add(winner.game_external_id);
+                }
+            }
+        }
+    }
+
+    // Batch fetch all games
+    const gamesMap = new Map<string, DbGame>();
+    if (gameExternalIds.size > 0) {
+        const games = await getFilteredUpcoming(chatId);
+        for (const game of games) {
+            if (gameExternalIds.has(game.external_id)) {
+                gamesMap.set(game.external_id, game);
+            }
+        }
+        // Fetch any missing games individually (shouldn't happen often)
+        for (const externalId of gameExternalIds) {
+            if (!gamesMap.has(externalId)) {
+                const game = await getGameByExternalId(chatId, externalId);
+                if (game) {
+                    gamesMap.set(externalId, game);
+                }
+            }
+        }
+    }
+
+    // Build items using pre-fetched data
+    for (const poll of polls) {
+        const optionVotes = allOptionVotesMap.get(poll.poll_id) || [];
         const validOptions = optionVotes.filter((opt) => !opt.is_unavailable && opt.vote_count >= 2);
 
         if (!validOptions.length) {
@@ -247,7 +299,7 @@ async function buildPollSelectionItems(chatId: string, polls: PollWithVotes[]) {
 
         for (const winner of winners) {
             if (!winner.game_external_id) continue;
-            const game = await getGameByExternalId(chatId, winner.game_external_id);
+            const game = gamesMap.get(winner.game_external_id);
             if (!game) continue;
             const { dd, mm, hh, mi } = formatGameDateTime(game.date_time);
             const title = truncateText(game.title ?? 'Игра');
@@ -292,7 +344,15 @@ async function updateChatCommands(bot: Bot, chatId: string, hasSource: boolean) 
         { command: 'reset', description: 'Очистить данные' },
     ];
     const withSync = hasSource ? [{ command: 'sync', description: 'Синхронизировать игры из расписания' }, ...base] : base;
-    await bot.api.setMyCommands(withSync, { scope: { type: 'chat', chat_id: chatId } as any });
+    const chatIdNum = Number(chatId);
+    if (!Number.isFinite(chatIdNum)) {
+        log.warn(`[updateChatCommands] Invalid chat ID format: ${chatId}, using default scope`);
+        await bot.api.setMyCommands(withSync);
+    } else {
+        await bot.api.setMyCommands(withSync, { 
+            scope: { type: 'chat', chat_id: chatIdNum } 
+        });
+    }
 }
 
 export function createBot() {

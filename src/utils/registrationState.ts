@@ -21,9 +21,11 @@ const TTL_MS = 60 * 60 * 1000;
 const CLEANUP_INTERVAL_MS = 10 * 60 * 1000;
 
 let cleanupInterval: NodeJS.Timeout | null = null;
+let cleanupStarted = false;
 
 function startCleanupInterval() {
-    if (cleanupInterval) return;
+    if (cleanupInterval || cleanupStarted) return;
+    cleanupStarted = true;
     
     cleanupInterval = setInterval(() => {
         const now = Date.now();
@@ -46,6 +48,23 @@ function startCleanupInterval() {
 }
 
 startCleanupInterval();
+
+// Graceful shutdown
+process.once('SIGTERM', () => {
+    if (cleanupInterval) {
+        clearInterval(cleanupInterval);
+        cleanupInterval = null;
+        cleanupStarted = false;
+    }
+});
+
+process.once('SIGINT', () => {
+    if (cleanupInterval) {
+        clearInterval(cleanupInterval);
+        cleanupInterval = null;
+        cleanupStarted = false;
+    }
+});
 
 function getOrCreateEntry(map: Map<string, RegistrationStateEntry>, chatId: string): RegistrationStateEntry {
     let entry = map.get(chatId);

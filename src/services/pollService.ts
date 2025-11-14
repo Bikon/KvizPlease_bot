@@ -1,9 +1,11 @@
 import { Bot } from 'grammy';
+import type { PollAnswer } from 'grammy/types';
 
 import { insertPoll, mapPollOption, pollExists, upsertVote } from '../db/repositories.js';
 import { formatGameDateTime } from '../utils/dateFormatter.js';
 import { log } from '../utils/logger.js';
 import { config } from '../config.js';
+import type { DbGame } from '../types.js';
 
 // Нейминг опросов:
 // - Классика: "Квиз, плиз (Классика) #1217"
@@ -14,7 +16,7 @@ export function buildPollTitle(groupName: string, number: string) {
     return `Квиз Плиз. ${groupName} #${number}`;
 }
 
-export async function postGroupPoll(bot: Bot, chatId: string | number, group: { groupKey: string; name: string; number: string; items: any[] }) {
+export async function postGroupPoll(bot: Bot, chatId: string | number, group: { groupKey: string; name: string; number: string; items: DbGame[] }) {
     if (!group.items.length) return null;
 
     const options = group.items.map((g) => {
@@ -41,11 +43,15 @@ export async function postGroupPoll(bot: Bot, chatId: string | number, group: { 
     return msg;
 }
 
-export async function handlePollAnswer(pollAnswer: any) {
-    const pollId = pollAnswer.poll_id as string;
+export async function handlePollAnswer(pollAnswer: PollAnswer) {
+    const pollId = pollAnswer.poll_id;
     const user = pollAnswer.user;
-    const userId = user.id as number;
-    const optionIds = pollAnswer.option_ids as number[];
+    if (!user) {
+        log.warn(`[Polls] Received vote without user info for poll ${pollId}, ignoring`);
+        return;
+    }
+    const userId = user.id;
+    const optionIds = pollAnswer.option_ids;
     const userNameParts = [user.username ? `@${user.username}` : null, user.first_name, user.last_name].filter(Boolean);
     const displayName = userNameParts.join(' ') || `user_${userId}`;
     const exists = await pollExists(pollId);
@@ -56,7 +62,7 @@ export async function handlePollAnswer(pollAnswer: any) {
     await upsertVote(pollId, userId, optionIds, displayName);
 }
 
-export async function createPollsByDateRange(bot: Bot, chatId: string | number, games: any[], startDate: Date, endDate: Date): Promise<number> {
+export async function createPollsByDateRange(bot: Bot, chatId: string | number, games: DbGame[], startDate: Date, endDate: Date): Promise<number> {
     if (!games.length) return 0;
     
     // Фильтруем игры в пределах периода
@@ -123,7 +129,7 @@ export async function createPollsByDateRange(bot: Bot, chatId: string | number, 
  * Creates polls for games within a specified number of days from now
  * This is a convenience wrapper around createPollsByDateRange
  */
-export async function createPollsByDatePeriod(bot: Bot, chatId: string | number, games: any[], periodDays: number): Promise<number> {
+export async function createPollsByDatePeriod(bot: Bot, chatId: string | number, games: DbGame[], periodDays: number): Promise<number> {
     const now = new Date();
     const endDate = new Date(now.getTime() + periodDays * 24 * 60 * 60 * 1000);
     return createPollsByDateRange(bot, chatId, games, now, endDate);

@@ -11,7 +11,9 @@ export class BotError extends Error {
     ) {
         super(message);
         this.name = 'BotError';
-        Error.captureStackTrace(this, this.constructor);
+        if (Error.captureStackTrace) {
+            Error.captureStackTrace(this, this.constructor);
+        }
     }
 }
 

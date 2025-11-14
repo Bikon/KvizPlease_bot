@@ -131,15 +131,25 @@ export function validatePhone(phone: string): string {
     const digits = sanitized.replace(/[^\d+]/g, '');
     
     // Check if it's a valid Russian phone number
-    // Formats: +79991234567, 89991234567, 9991234567
-    const phoneRegex = /^(\+?7|8)?\d{10}$/;
+    // Formats: +79991234567 (12 chars: +7 + 10 digits), 89991234567 (11 digits: 8 + 10), 79991234567 (11 digits: 7 + 10)
+    // Must start with +7, 8, or 7, followed by exactly 10 digits
+    const phoneRegex = /^(\+7|8|7)\d{10}$/;
     if (!phoneRegex.test(digits)) {
         throw new ValidationError('Invalid phone number format. Use Russian format: +79991234567 or 89991234567');
     }
     
     // Normalize to +7 format
-    const normalized = digits.replace(/^(\+?7|8)/, '+7');
-    return normalized;
+    if (digits.startsWith('+7')) {
+        return digits; // Already in correct format
+    } else if (digits.startsWith('8')) {
+        // Replace leading 8 with +7
+        return '+7' + digits.slice(1);
+    } else if (digits.startsWith('7')) {
+        // Replace leading 7 with +7
+        return '+7' + digits.slice(1);
+    }
+    // Should never reach here due to regex check, but just in case
+    return '+7' + digits;
 }
 
 /**

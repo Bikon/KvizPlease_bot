@@ -4,7 +4,7 @@ type SyncTask = {
     chatId: string;
     sourceUrl: string;
     resolve: (value: { added: number; skipped: number; excluded: number }) => void;
-    reject: (error: any) => void;
+    reject: (error: unknown) => void;
 };
 
 class SyncQueue {

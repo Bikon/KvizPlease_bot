@@ -23,9 +23,11 @@ const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 
 // Start cleanup interval
 let cleanupInterval: NodeJS.Timeout | null = null;
+let cleanupStarted = false;
 
 function startCleanupInterval() {
-    if (cleanupInterval) return;
+    if (cleanupInterval || cleanupStarted) return;
+    cleanupStarted = true;
     
     cleanupInterval = setInterval(() => {
         const now = Date.now();
@@ -45,6 +47,23 @@ function startCleanupInterval() {
 
 // Start cleanup on module load
 startCleanupInterval();
+
+// Graceful shutdown
+process.once('SIGTERM', () => {
+    if (cleanupInterval) {
+        clearInterval(cleanupInterval);
+        cleanupInterval = null;
+        cleanupStarted = false;
+    }
+});
+
+process.once('SIGINT', () => {
+    if (cleanupInterval) {
+        clearInterval(cleanupInterval);
+        cleanupInterval = null;
+        cleanupStarted = false;
+    }
+});
 
 export function setConversationState(chatId: string, step: string, data: Record<string, any> = {}) {
     states.set(chatId, { 
