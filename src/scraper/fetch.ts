@@ -180,30 +180,54 @@ async function ensureScheduleLoaded(page: Page): Promise<void> {
     }
 }
 
-async function gotoWithFallback(page: Page, targetUrl: string): Promise<boolean> {
+async function gotoWithFallback(browser: Browser, targetUrl: string): Promise<Page | null> {
     const strategies: Array<'domcontentloaded' | 'load' | 'networkidle0'> = ['domcontentloaded', 'load', 'networkidle0'];
+    
     for (const strategy of strategies) {
-        const navigationResult = await page.goto(targetUrl, { waitUntil: strategy, timeout: NAV_TIMEOUT_MS })
-            .then(() => true)
-            .catch((err) => {
-                log.warn(`[Scraper] Navigation failed for ${targetUrl} with waitUntil=${strategy}`, err);
-                return false;
+        let page: Page | null = null;
+        try {
+            // Create a fresh page for each strategy attempt to avoid state issues
+            page = await browser.newPage();
+            await page.setViewport({ width: 1280, height: 1400 });
+            await page.setUserAgent(randomUserAgent());
+            await page.setExtraHTTPHeaders({
+                'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
             });
-        
-        if (navigationResult) {
-            log.info(`[Scraper] Successfully navigated to ${targetUrl} (waitUntil=${strategy})`);
-            return true;
+            page.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
+            page.setDefaultTimeout(PAGE_TIMEOUT_MS);
+            
+            const response = await page.goto(targetUrl, { 
+                waitUntil: strategy, 
+                timeout: NAV_TIMEOUT_MS 
+            });
+            
+            if (response && response.ok()) {
+                log.info(`[Scraper] Successfully navigated to ${targetUrl} (waitUntil=${strategy})`);
+                return page;
+            }
+            
+            log.warn(`[Scraper] Navigation to ${targetUrl} completed but response was not OK (waitUntil=${strategy})`);
+            // Close the failed page and try next strategy
+            await page.close().catch(() => {});
+            page = null;
+        } catch (err) {
+            log.warn(`[Scraper] Navigation failed for ${targetUrl} with waitUntil=${strategy}`, err);
+            // Close the failed page and try next strategy
+            if (page) {
+                await page.close().catch(() => {});
+            }
+            page = null;
         }
-        
-        await delay(1_000);
     }
-    return false;
+    
+    return null;
 }
 
 async function fetchViaBrowser(url: string): Promise<string> {
     let browser: Browser | null = null;
 
     for (let attempt = 1; attempt <= MAX_BROWSER_ATTEMPTS; attempt++) {
+        let page: Page | null = null;
         try {
             log.info(`[Scraper] Browser fetch attempt ${attempt}`);
             browser = await puppeteer.launch({
@@ -212,21 +236,14 @@ async function fetchViaBrowser(url: string): Promise<string> {
                 args: BROWSER_LAUNCH_ARGS,
             });
 
-            const page = await browser.newPage();
-            await page.setViewport({ width: 1280, height: 1400 });
-            await page.setUserAgent(randomUserAgent());
-            await page.setExtraHTTPHeaders({
-                'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
-            });
-            page.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
-            page.setDefaultTimeout(PAGE_TIMEOUT_MS);
-
-            const navigated = await gotoWithFallback(page, url);
-            if (!navigated) {
+            page = await gotoWithFallback(browser, url);
+            if (!page) {
                 log.warn('[Scraper] Navigation failed for all waitUntil strategies');
                 if (attempt === MAX_BROWSER_ATTEMPTS) {
                     throw new Error('Navigation failed for all waitUntil strategies');
                 }
+                await browser.close().catch(() => {});
+                browser = null;
                 await delay(1_500 * attempt);
                 continue;
             }
@@ -236,6 +253,9 @@ async function fetchViaBrowser(url: string): Promise<string> {
             const html = await page.content();
             if (containsChallenge(html)) {
                 log.warn('[Scraper] Received anti-bot challenge page even after browser navigation');
+                await page.close().catch(() => {});
+                await browser.close().catch(() => {});
+                browser = null;
                 if (attempt === MAX_BROWSER_ATTEMPTS) {
                     throw new Error('Received anti-bot challenge page even after browser navigation');
                 }
@@ -244,14 +264,22 @@ async function fetchViaBrowser(url: string): Promise<string> {
             }
 
             log.info('[Scraper] Browser fetch succeeded');
-            return html;
+            const result = html;
+            // Clean up
+            await page.close().catch(() => {});
+            await browser.close().catch(() => {});
+            return result;
         } catch (err) {
             log.error(`[Scraper] Browser attempt ${attempt} failed`, err);
+            if (page) {
+                await page.close().catch(() => {});
+            }
+            if (browser) {
+                await browser.close().catch(() => {});
+            }
+            browser = null;
             if (attempt === MAX_BROWSER_ATTEMPTS) throw err;
             await delay(1_500 * attempt);
-        } finally {
-            await browser?.close().catch(() => {});
-            browser = null;
         }
     }
 
