@@ -12,8 +12,3 @@ export const CITIES = {
 } as const;
 
 export type CityKey = keyof typeof CITIES;
-
-
-
-
-

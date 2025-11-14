@@ -28,6 +28,3 @@ export function updateConversationData(chatId: string, newData: Record<string, a
         states.set(chatId, current);
     }
 }
-
-
-

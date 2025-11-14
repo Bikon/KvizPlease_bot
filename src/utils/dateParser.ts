@@ -57,5 +57,3 @@ export function formatDateTimeForDisplay(date: Date): string {
 export function validateDateRange(startDate: Date, endDate: Date): boolean {
     return endDate > startDate;
 }
-
-

@@ -180,4 +180,3 @@ export function buildManageStatusMenuKeyboard() {
     kb.text('📝 Управлять регистрациями', CB.STATUS_MENU_REGISTERED);
     return kb;
 }
-

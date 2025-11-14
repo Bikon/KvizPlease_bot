@@ -41,4 +41,3 @@ export function formatGameDateTime(dateTime: Date | string) {
         mi: pad(dt.minute()),
     };
 }
-

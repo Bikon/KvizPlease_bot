@@ -28,4 +28,3 @@ export function getPollWordForm(count: number): string {
     if (count >= 2 && count <= 4) return 'опроса';
     return 'опросов';
 }
-

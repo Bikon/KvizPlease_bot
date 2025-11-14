@@ -20,4 +20,3 @@ export function getSelectedTypes(chatId: string): Set<string> {
 export function clearSelectedTypes(chatId: string): void {
     selectedTypesMap.delete(chatId);
 }
-

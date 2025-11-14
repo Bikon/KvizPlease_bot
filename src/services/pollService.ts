@@ -1,7 +1,8 @@
 import { Bot } from 'grammy';
 
-import { insertPoll, mapPollOption, upsertVote } from '../db/repositories.js';
+import { insertPoll, mapPollOption, pollExists, upsertVote } from '../db/repositories.js';
 import { formatGameDateTime } from '../utils/dateFormatter.js';
+import { log } from '../utils/logger.js';
 
 // Нейминг опросов:
 // - Классика: "Квиз, плиз (Классика) #1217"
@@ -46,6 +47,11 @@ export async function handlePollAnswer(pollAnswer: any) {
     const optionIds = pollAnswer.option_ids as number[];
     const userNameParts = [user.username ? `@${user.username}` : null, user.first_name, user.last_name].filter(Boolean);
     const displayName = userNameParts.join(' ') || `user_${userId}`;
+    const exists = await pollExists(pollId);
+    if (!exists) {
+        log.warn(`[Polls] Received vote for unknown poll ${pollId}, ignoring`);
+        return;
+    }
     await upsertVote(pollId, userId, optionIds, displayName);
 }
 

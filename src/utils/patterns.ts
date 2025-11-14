@@ -58,4 +58,3 @@ export function validateAndNormalizePhone(phone: string): string | null {
     const digits = match.slice(2).join('');
     return `+7${digits}`;
 }
-

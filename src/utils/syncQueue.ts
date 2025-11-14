@@ -62,4 +62,3 @@ class SyncQueue {
 }
 
 export const syncQueue = new SyncQueue();
-

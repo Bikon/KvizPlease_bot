@@ -61,5 +61,3 @@ export function clearAllRegistrationState(chatId: string): void {
     clearSelectedGames(chatId);
     clearPollGameMapping(chatId);
 }
-
-
