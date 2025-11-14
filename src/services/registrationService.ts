@@ -68,29 +68,38 @@ export async function registerForGame(params: RegistrationParams): Promise<Regis
         await page.setViewport({ width: 1280, height: 1400 });
 
         const targetOrigin = (() => {
-            const tryParse = (value: string) => {
-                const parsed = new URL(value);
-                return parsed.origin;
-            };
-            try {
-                return tryParse(gameUrl);
-            } catch (primaryError) {
+            const parseUrl = (value: string): string | null => {
                 try {
-                    const normalized = gameUrl.startsWith('http') ? gameUrl : `https://${gameUrl}`;
-                    return tryParse(normalized);
-                } catch (secondaryError) {
-                    const match = gameUrl.match(/([a-z0-9-]+\.quizplease\.ru)/i);
-                    if (match?.[1]) {
-                        return `https://${match[1].toLowerCase()}`;
-                    }
-                    log.warn('[Registration] Failed to parse gameUrl origin, falling back to default quizplease domain', {
-                        gameUrl,
-                        primaryError,
-                        secondaryError,
-                    });
-                    return 'https://quizplease.ru';
+                    const parsed = new URL(value);
+                    return parsed.origin;
+                } catch {
+                    return null;
                 }
+            };
+            
+            // Try parsing the URL as-is
+            const parsed = parseUrl(gameUrl);
+            if (parsed) {
+                return parsed;
             }
+            
+            // Try with https:// prefix if missing
+            const normalized = gameUrl.startsWith('http') ? gameUrl : `https://${gameUrl}`;
+            const parsedNormalized = parseUrl(normalized);
+            if (parsedNormalized) {
+                return parsedNormalized;
+            }
+            
+            // Fallback: extract domain from string
+            const match = gameUrl.match(/([a-z0-9-]+\.quizplease\.ru)/i);
+            if (match?.[1]) {
+                return `https://${match[1].toLowerCase()}`;
+            }
+            
+            log.warn('[Registration] Failed to parse gameUrl origin, falling back to default quizplease domain', {
+                gameUrl,
+            });
+            return 'https://quizplease.ru';
         })();
 
         async function warmupNavigation(origin: string) {
@@ -114,12 +123,21 @@ export async function registerForGame(params: RegistrationParams): Promise<Regis
         let pageSnippet = '';
         const maxAttempts = 3;
 
+        // Helper to check if selector exists without using exceptions for control flow
+        const checkSelectorExists = async (selector: string, timeout: number) => {
+            try {
+                return await page.waitForSelector(selector, { timeout });
+            } catch {
+                return null;
+            }
+        };
+
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
             log.info(`[Registration] Navigating to: ${gameUrl} (attempt ${attempt})`);
-            await page.goto(gameUrl, { waitUntil: 'networkidle2', timeout: 30000 });
+            await page.goto(gameUrl, { waitUntil: 'networkidle0', timeout: 30000 });
             await sleep(1500);
 
-            const formHandle = await page.waitForSelector('form#main-form', { timeout: 10000 }).catch(() => null);
+            const formHandle = await checkSelectorExists('form#main-form', 10000);
             if (formHandle) {
                 formPresent = true;
                 break;
@@ -156,9 +174,11 @@ export async function registerForGame(params: RegistrationParams): Promise<Regis
         log.info('[Registration] Filling out registration form');
         
         // Helper to set text inputs reliably
-        const setTextInput = async (selector: string, value: string) => {
-            const exists = await page.waitForSelector(selector, { timeout: 15000 }).catch(() => null);
-            if (!exists) throw new Error(`Input not found: ${selector}`);
+        const setTextInput = async (selector: string, value: string): Promise<boolean> => {
+            const exists = await checkSelectorExists(selector, 15000);
+            if (!exists) {
+                return false;
+            }
             await page.evaluate(
                 (sel, v) => {
                     const el = document.querySelector<HTMLInputElement | HTMLTextAreaElement>(sel);
@@ -171,16 +191,29 @@ export async function registerForGame(params: RegistrationParams): Promise<Regis
                 selector,
                 value
             );
+            return true;
         };
         
-        await setTextInput('input[name="QpRecord[teamName]"]', teamInfo.team_name);
-        await setTextInput('input[name="QpRecord[captainName]"]', teamInfo.captain_name);
-        await setTextInput('input[name="QpRecord[email]"]', teamInfo.email);
-        await setTextInput('input[name="QpRecord[phone]"]', teamInfo.phone);
+        const teamNameSet = await setTextInput('input[name="QpRecord[teamName]"]', teamInfo.team_name);
+        if (!teamNameSet) {
+            return { success: false, error: 'Input not found: input[name="QpRecord[teamName]"]' };
+        }
+        const captainNameSet = await setTextInput('input[name="QpRecord[captainName]"]', teamInfo.captain_name);
+        if (!captainNameSet) {
+            return { success: false, error: 'Input not found: input[name="QpRecord[captainName]"]' };
+        }
+        const emailSet = await setTextInput('input[name="QpRecord[email]"]', teamInfo.email);
+        if (!emailSet) {
+            return { success: false, error: 'Input not found: input[name="QpRecord[email]"]' };
+        }
+        const phoneSet = await setTextInput('input[name="QpRecord[phone]"]', teamInfo.phone);
+        if (!phoneSet) {
+            return { success: false, error: 'Input not found: input[name="QpRecord[phone]"]' };
+        }
         
         // Number of players - select from dropdown (hidden select, so set via script)
         const playersSelector = 'select[name="QpRecord[count]"]';
-        const playersSelectExists = await page.waitForSelector(playersSelector, { timeout: 8000 }).catch(() => null);
+        const playersSelectExists = await checkSelectorExists(playersSelector, 8000);
         if (!playersSelectExists) {
             throw new Error(`Players select not found: ${playersSelector}`);
         }
@@ -244,15 +277,10 @@ export async function registerForGame(params: RegistrationParams): Promise<Regis
         log.info('[Registration] Registration button clicked, waiting for response...');
         
         // Wait for navigation or success message
-        try {
-            await page.waitForNavigation({ timeout: 10000, waitUntil: 'networkidle2' });
-        } catch (e) {
-            // Navigation might not happen if it's an AJAX form
-            log.info('[Registration] No navigation, checking for success indicators...');
-        }
+        // Note: waitForNavigation is deprecated, using setTimeout as alternative
+        await new Promise(resolve => setTimeout(resolve, 4000)); // Wait 4 seconds for any navigation or AJAX response
         
         // Check for success indicators
-        await new Promise(resolve => setTimeout(resolve, 2000));
         const finalBodyText = await page.evaluate(() => document.body.textContent || '');
         
         // Look for success messages (adjust these based on actual site responses)

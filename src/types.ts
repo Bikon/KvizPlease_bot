@@ -30,15 +30,6 @@ export type Game = {
     excluded?: boolean;
 };
 
-export type GameGroup = {
-    groupKey: string;   // "[тип]#номер"
-    name: string;       // "[тип]" или "Квиз, плиз"
-    number: string;     // "7" / "1212"
-    items: Game[];      // все даты (>=1)
-    played?: boolean;   // если все помечены как played или есть запись о played по группе
-    excluded?: boolean; // если группа исключена (таблица excluded_groups или все items.excluded)
-};
-
 // Database row types
 export type DbGame = {
     id: number;
@@ -62,21 +53,4 @@ export type DbGame = {
     played: boolean;
     registered: boolean;
     registered_at: Date | null;
-};
-
-export type DbGameGroup = {
-    group_key: string;
-    type_name: string;
-    num: string;
-    played: boolean;
-    cnt: number;
-    polled_by_package: boolean;
-    polled_by_date: boolean;
-};
-
-export type PollGroup = {
-    groupKey: string;
-    name: string;
-    number: string;
-    items: DbGame[];
 };

@@ -7,15 +7,27 @@ import { log } from '../utils/logger.js';
 import { config } from '../config.js';
 import type { DbGame } from '../types.js';
 
-// Нейминг опросов:
-// - Классика: "Квиз, плиз (Классика) #1217"
-// - Остальные: "Квиз Плиз. [music party] 2000-е #7"
+/**
+ * Builds a poll title from group name and number
+ * Special formatting for classic games: "Квиз, плиз (Классика) #1217"
+ * Other games: "Квиз Плиз. [music party] 2000-е #7"
+ * @param groupName - The name of the game group
+ * @param number - The game number
+ * @returns Formatted poll title string
+ */
 export function buildPollTitle(groupName: string, number: string) {
     const isClassic = /^Квиз\s*,?\s*плиз!?$/i.test(groupName.replace(/!+$/,'').trim());
     if (isClassic) return `Квиз, плиз (Классика) #${number}`;
     return `Квиз Плиз. ${groupName} #${number}`;
 }
 
+/**
+ * Creates and posts a poll for a game group
+ * @param bot - The bot instance to use for posting
+ * @param chatId - The chat ID to post the poll to
+ * @param group - The game group with items to create poll for
+ * @returns The sent message object, or null if group has no items
+ */
 export async function postGroupPoll(bot: Bot, chatId: string | number, group: { groupKey: string; name: string; number: string; items: DbGame[] }) {
     if (!group.items.length) return null;
 
@@ -43,6 +55,11 @@ export async function postGroupPoll(bot: Bot, chatId: string | number, group: { 
     return msg;
 }
 
+/**
+ * Handles a poll answer from a user
+ * Validates the poll exists and saves the vote to database
+ * @param pollAnswer - The poll answer object from Telegram
+ */
 export async function handlePollAnswer(pollAnswer: PollAnswer) {
     const pollId = pollAnswer.poll_id;
     const user = pollAnswer.user;
@@ -62,6 +79,16 @@ export async function handlePollAnswer(pollAnswer: PollAnswer) {
     await upsertVote(pollId, userId, optionIds, displayName);
 }
 
+/**
+ * Creates polls for games within a date range
+ * Groups games into chunks to fit Telegram poll limits (max 10 options)
+ * @param bot - The bot instance to use for posting
+ * @param chatId - The chat ID to post polls to
+ * @param games - Array of games to create polls for
+ * @param startDate - Start date of the range
+ * @param endDate - End date of the range
+ * @returns Number of polls created
+ */
 export async function createPollsByDateRange(bot: Bot, chatId: string | number, games: DbGame[], startDate: Date, endDate: Date): Promise<number> {
     if (!games.length) return 0;
     
@@ -128,6 +155,11 @@ export async function createPollsByDateRange(bot: Bot, chatId: string | number, 
 /**
  * Creates polls for games within a specified number of days from now
  * This is a convenience wrapper around createPollsByDateRange
+ * @param bot - The bot instance to use for posting
+ * @param chatId - The chat ID to post polls to
+ * @param games - Array of games to create polls for
+ * @param periodDays - Number of days from now to include
+ * @returns Number of polls created
  */
 export async function createPollsByDatePeriod(bot: Bot, chatId: string | number, games: DbGame[], periodDays: number): Promise<number> {
     const now = new Date();

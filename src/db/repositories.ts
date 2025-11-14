@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { pool } from './pool.js';
-import type { Game } from '../types.js';
+import type { Game, DbGame } from '../types.js';
 import { log } from '../utils/logger.js';
 
 export { pool };
@@ -39,7 +39,9 @@ async function ensureUpsertSql(): Promise<string> {
             const upsertSqlPath = path.resolve(process.cwd(), 'sql', 'upsert_game.sql');
             const sql = await fs.readFile(upsertSqlPath, 'utf8');
             if (!sql || sql.trim().length === 0) {
-                throw new Error('upsert_game.sql is empty or could not be read');
+                const error = new Error('upsert_game.sql is empty or could not be read');
+                log.error('Failed to load upsert_game.sql:', error);
+                throw error;
             }
             UPSERT_SQL = sql;
             return sql;
@@ -54,7 +56,14 @@ async function ensureUpsertSql(): Promise<string> {
     return await upsertSqlLoadPromise;
 }
 
-// базовый UPSERT игры
+/**
+ * Upserts a game into the database
+ * Creates a new game if it doesn't exist, or updates existing game if it does
+ * @param game - The game object to upsert
+ * @param chatId - The chat ID this game belongs to
+ * @param sourceUrl - The source URL where this game was scraped from
+ * @throws {Error} If SQL file cannot be loaded or database query fails
+ */
 export async function upsertGame(game: Game, chatId: string, sourceUrl: string) {
     const {
         externalId, title, dateTime, venue, district, address, price, difficulty, status, url, groupKey
@@ -66,7 +75,13 @@ export async function upsertGame(game: Game, chatId: string, sourceUrl: string) 
     ]);
 }
 
-// получить все будущие игры с учётом флагов и исключений
+/**
+ * Gets all upcoming games for a chat, filtered by date range, districts, and exclusions
+ * @param daysAhead - Number of days ahead to look for games
+ * @param allowedDistricts - Array of allowed district names (empty array = all districts)
+ * @param chatId - The chat ID to get games for
+ * @returns Array of upcoming games sorted by group_key and date_time
+ */
 export async function findUpcomingGames(daysAhead: number, allowedDistricts: string[], chatId: string): Promise<DbGame[]> {
     const res = await pool.query<DbGame>(
         `SELECT g.*
@@ -88,7 +103,14 @@ export async function findUpcomingGames(daysAhead: number, allowedDistricts: str
     return res.rows;
 }
 
-// получить количество всех будущих игр с учётом основных фильтров (для точной статистики синхронизации)
+/**
+ * Counts all upcoming games for a chat with filters applied
+ * Used for accurate sync statistics
+ * @param chatId - The chat ID to count games for
+ * @param daysAhead - Number of days ahead to look (default: 30)
+ * @param allowedDistricts - Array of allowed district names (default: [])
+ * @returns Total count of upcoming games matching the filters
+ */
 export async function countAllUpcomingGames(chatId: string, daysAhead: number = 30, allowedDistricts: string[] = []) {
     const res = await pool.query(
         `SELECT COUNT(*) as count
@@ -109,7 +131,13 @@ export async function countAllUpcomingGames(chatId: string, daysAhead: number = 
     return parseInt(res.rows[0]?.count || '0', 10);
 }
 
-// сгруппировать на стороне БД признаком group_key (для /groups)
+/**
+ * Gets upcoming games grouped by group_key with aggregated statistics
+ * @param daysAhead - Number of days ahead to look for games
+ * @param allowedDistricts - Array of allowed district names (empty array = all districts)
+ * @param chatId - The chat ID to get groups for
+ * @returns Array of game groups with counts and status flags
+ */
 export async function findUpcomingGroups(daysAhead: number, allowedDistricts: string[], chatId: string) {
     const res = await pool.query(
         `WITH base AS (
@@ -213,19 +241,6 @@ export async function upsertVote(pollId: string, userId: number, optionIds: numb
     );
 }
 
-// simple app settings
-export async function getSetting(key: string): Promise<string | null> {
-    const r = await pool.query('SELECT value FROM app_settings WHERE key=$1', [key]);
-    return r.rows[0]?.value ?? null;
-}
-
-export async function setSetting(key: string, value: string): Promise<void> {
-    await pool.query(
-        `INSERT INTO app_settings(key, value) VALUES ($1,$2)
-         ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value, updated_at=now()`,
-        [key, value]
-    );
-}
 
 export async function getChatSetting(chatId: string, key: string): Promise<string | null> {
     const r = await pool.query('SELECT value FROM chat_settings WHERE chat_id=$1 AND key=$2', [chatId, key]);
@@ -240,6 +255,12 @@ export async function setChatSetting(chatId: string, key: string, value: string)
     );
 }
 
+/**
+ * Resets all data for a chat (settings, games, polls, team info)
+ * Uses a database transaction to ensure atomicity
+ * @param chatId - The chat ID to reset data for
+ * @throws {Error} If transaction fails
+ */
 export async function resetChatData(chatId: string): Promise<void> {
     const client = await pool.connect();
     try {
@@ -260,6 +281,13 @@ export async function resetChatData(chatId: string): Promise<void> {
     }
 }
 
+/**
+ * Changes the source URL for a chat and clears all related data
+ * Uses a database transaction to ensure atomicity
+ * @param chatId - The chat ID to change source for
+ * @param newUrl - The new source URL
+ * @throws {Error} If transaction fails
+ */
 export async function changeSourceUrl(chatId: string, newUrl: string): Promise<void> {
     const client = await pool.connect();
     try {
@@ -334,11 +362,15 @@ export async function saveTeamInfo(chatId: string, info: TeamInfo): Promise<void
     );
 }
 
-export async function deleteTeamInfo(chatId: string): Promise<void> {
-    await pool.query('DELETE FROM team_info WHERE chat_id=$1', [chatId]);
-}
 
-// Registration management
+/**
+ * Marks a game as registered for a chat
+ * If the game belongs to a group, unmarks other games in the same group
+ * Uses a database transaction to ensure atomicity
+ * @param chatId - The chat ID
+ * @param externalId - The external ID of the game to mark as registered
+ * @throws {Error} If transaction fails
+ */
 export async function markGameRegistered(chatId: string, externalId: string): Promise<void> {
     const client = await pool.connect();
     try {

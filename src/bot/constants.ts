@@ -32,5 +32,3 @@ export const CB = {
     STATUS_MENU_PLAYED: 'status_played',
     STATUS_MENU_REGISTERED: 'status_registered',
 } as const;
-
-export type CallbackPrefixes = typeof CB;

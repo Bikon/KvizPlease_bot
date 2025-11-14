@@ -1,8 +1,21 @@
+/**
+ * Database connection pool configuration
+ * Manages PostgreSQL connections with proper pooling, timeouts, and error handling
+ */
+
 import { Pool } from 'pg';
 
 import { config } from '../config.js';
 import { log } from '../utils/logger.js';
 
+/**
+ * PostgreSQL connection pool
+ * Configured with:
+ * - Max 20 connections
+ * - 30s idle timeout
+ * - 2s connection timeout
+ * - Error handling and logging
+ */
 export const pool = new Pool({
     ...config.db,
     max: 20, // Maximum number of clients in the pool

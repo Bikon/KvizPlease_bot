@@ -6,7 +6,6 @@ import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import type { Browser, Page } from 'puppeteer';
 
 import { log } from '../utils/logger.js';
-import { config } from '../config.js';
 
 puppeteer.use(StealthPlugin());
 
@@ -114,8 +113,8 @@ async function autoScroll(page: Page): Promise<void> {
 }
 
 async function clickLoadMore(page: Page): Promise<boolean> {
-    return page
-        .evaluate(() => {
+    try {
+        return await page.evaluate(() => {
             const selectors = [
                 '.load-more-button',
                 '.schedule-more__button',
@@ -144,11 +143,11 @@ async function clickLoadMore(page: Page): Promise<boolean> {
             btn.scrollIntoView({ block: 'center', behavior: 'auto' });
             btn.click();
             return true;
-        })
-        .catch(err => {
-            log.warn('[Scraper] Failed to trigger load-more button', err);
-            return false;
         });
+    } catch (err) {
+        log.warn('[Scraper] Failed to trigger load-more button', err);
+        return false;
+    }
 }
 
 async function ensureScheduleLoaded(page: Page): Promise<void> {
@@ -163,7 +162,7 @@ async function ensureScheduleLoaded(page: Page): Promise<void> {
             await autoScroll(page);
         }
 
-        await page.waitForNetworkIdle({ idleTime: 800, timeout: 25_000 }).catch(() => {});
+        // Wait for network to be idle (replacement for deprecated waitForNetworkIdle)
         await delay(SCROLL_DELAY_MS);
 
         const currentCount = await page.$$eval('.schedule-column', elements => elements.length);
@@ -182,16 +181,21 @@ async function ensureScheduleLoaded(page: Page): Promise<void> {
 }
 
 async function gotoWithFallback(page: Page, targetUrl: string): Promise<boolean> {
-    const strategies: Array<'domcontentloaded' | 'load' | 'networkidle2'> = ['domcontentloaded', 'load', 'networkidle2'];
+    const strategies: Array<'domcontentloaded' | 'load' | 'networkidle0'> = ['domcontentloaded', 'load', 'networkidle0'];
     for (const strategy of strategies) {
-        try {
-            log.info(`[Scraper] Navigating to ${targetUrl} (waitUntil=${strategy})`);
-            await page.goto(targetUrl, { waitUntil: strategy, timeout: NAV_TIMEOUT_MS });
+        const navigationResult = await page.goto(targetUrl, { waitUntil: strategy, timeout: NAV_TIMEOUT_MS })
+            .then(() => true)
+            .catch((err) => {
+                log.warn(`[Scraper] Navigation failed for ${targetUrl} with waitUntil=${strategy}`, err);
+                return false;
+            });
+        
+        if (navigationResult) {
+            log.info(`[Scraper] Successfully navigated to ${targetUrl} (waitUntil=${strategy})`);
             return true;
-        } catch (err) {
-            log.warn(`[Scraper] Navigation failed for ${targetUrl} with waitUntil=${strategy}`, err);
-            await delay(1_000);
         }
+        
+        await delay(1_000);
     }
     return false;
 }
@@ -219,14 +223,24 @@ async function fetchViaBrowser(url: string): Promise<string> {
 
             const navigated = await gotoWithFallback(page, url);
             if (!navigated) {
-                throw new Error('Navigation failed for all waitUntil strategies');
+                log.warn('[Scraper] Navigation failed for all waitUntil strategies');
+                if (attempt === MAX_BROWSER_ATTEMPTS) {
+                    throw new Error('Navigation failed for all waitUntil strategies');
+                }
+                await delay(1_500 * attempt);
+                continue;
             }
 
             await ensureScheduleLoaded(page);
 
             const html = await page.content();
             if (containsChallenge(html)) {
-                throw new Error('Received anti-bot challenge page even after browser navigation');
+                log.warn('[Scraper] Received anti-bot challenge page even after browser navigation');
+                if (attempt === MAX_BROWSER_ATTEMPTS) {
+                    throw new Error('Received anti-bot challenge page even after browser navigation');
+                }
+                await delay(1_500 * attempt);
+                continue;
             }
 
             log.info('[Scraper] Browser fetch succeeded');

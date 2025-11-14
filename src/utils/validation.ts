@@ -3,14 +3,22 @@
  */
 
 export class ValidationError extends Error {
-    constructor(message: string, public field?: string) {
+    constructor(message: string) {
         super(message);
         this.name = 'ValidationError';
     }
 }
 
 /**
- * Validates and normalizes chat ID
+ * Validates and normalizes a Telegram chat ID
+ * @param chatId - The chat ID to validate (can be string or number)
+ * @returns Normalized chat ID as string
+ * @throws {ValidationError} If chat ID is invalid
+ * @example
+ * ```ts
+ * const id = validateChatId('123456789');
+ * // Returns: '123456789'
+ * ```
  */
 export function validateChatId(chatId: unknown): string {
     if (typeof chatId !== 'string') {
@@ -31,13 +39,17 @@ export function validateChatId(chatId: unknown): string {
 }
 
 /**
- * Sanitizes text input to prevent XSS and other issues
+ * Sanitizes text input to prevent XSS and other security issues
+ * @param input - The input string to sanitize
+ * @param maxLength - Maximum length of the output (default: 255)
+ * @returns Sanitized string with HTML tags removed and trimmed
+ * @example
+ * ```ts
+ * const safe = sanitizeInput('<script>alert("xss")</script>Hello', 100);
+ * // Returns: 'scriptalert("xss")/scriptHello'
+ * ```
  */
 export function sanitizeInput(input: string, maxLength: number = 255): string {
-    if (typeof input !== 'string') {
-        return '';
-    }
-    
     return input
         .trim()
         .slice(0, maxLength)
@@ -45,7 +57,15 @@ export function sanitizeInput(input: string, maxLength: number = 255): string {
 }
 
 /**
- * Validates URL format
+ * Validates URL format and ensures it uses HTTP/HTTPS protocol
+ * @param url - The URL string to validate
+ * @returns Parsed URL object
+ * @throws {ValidationError} If URL is invalid or doesn't use HTTP/HTTPS
+ * @example
+ * ```ts
+ * const url = validateUrl('https://example.com');
+ * // Returns: URL object
+ * ```
  */
 export function validateUrl(url: string): URL {
     try {
@@ -58,15 +78,25 @@ export function validateUrl(url: string): URL {
         
         return parsed;
     } catch (error) {
+        // If it's already a ValidationError, re-throw it
         if (error instanceof ValidationError) {
             throw error;
         }
+        // Otherwise, wrap the error
         throw new ValidationError('Invalid URL format');
     }
 }
 
 /**
- * Validates that URL is from quizplease.ru domain
+ * Validates that URL is from quizplease.ru domain and points to a schedule page
+ * @param url - The URL string to validate
+ * @returns Parsed URL object
+ * @throws {ValidationError} If URL is not from quizplease.ru or not a schedule page
+ * @example
+ * ```ts
+ * const url = validateQuizPleaseUrl('https://moscow.quizplease.ru/schedule');
+ * // Returns: URL object
+ * ```
  */
 export function validateQuizPleaseUrl(url: string): URL {
     const parsed = validateUrl(url);
@@ -83,7 +113,15 @@ export function validateQuizPleaseUrl(url: string): URL {
 }
 
 /**
- * Validates team name
+ * Validates and sanitizes team name
+ * @param name - The team name to validate
+ * @returns Sanitized team name (2-100 characters)
+ * @throws {ValidationError} If team name is too short or too long
+ * @example
+ * ```ts
+ * const name = validateTeamName('My Team');
+ * // Returns: 'My Team'
+ * ```
  */
 export function validateTeamName(name: string): string {
     const sanitized = sanitizeInput(name, 100);
@@ -97,7 +135,15 @@ export function validateTeamName(name: string): string {
 }
 
 /**
- * Validates captain name
+ * Validates and sanitizes captain name
+ * @param name - The captain name to validate
+ * @returns Sanitized captain name (2-100 characters)
+ * @throws {ValidationError} If captain name is too short or too long
+ * @example
+ * ```ts
+ * const name = validateCaptainName('John Doe');
+ * // Returns: 'John Doe'
+ * ```
  */
 export function validateCaptainName(name: string): string {
     const sanitized = sanitizeInput(name, 100);
@@ -111,7 +157,15 @@ export function validateCaptainName(name: string): string {
 }
 
 /**
- * Validates email format
+ * Validates and normalizes email address
+ * @param email - The email address to validate
+ * @returns Normalized email (lowercase, sanitized)
+ * @throws {ValidationError} If email format is invalid
+ * @example
+ * ```ts
+ * const email = validateEmail('User@Example.COM');
+ * // Returns: 'user@example.com'
+ * ```
  */
 export function validateEmail(email: string): string {
     const sanitized = sanitizeInput(email, 255);
@@ -123,7 +177,16 @@ export function validateEmail(email: string): string {
 }
 
 /**
- * Validates phone number (Russian format)
+ * Validates and normalizes Russian phone number
+ * Accepts formats: +79991234567, 89991234567, 79991234567
+ * @param phone - The phone number to validate
+ * @returns Normalized phone number in +7XXXXXXXXXX format
+ * @throws {ValidationError} If phone number format is invalid
+ * @example
+ * ```ts
+ * const phone = validatePhone('8-999-123-45-67');
+ * // Returns: '+79991234567'
+ * ```
  */
 export function validatePhone(phone: string): string {
     const sanitized = sanitizeInput(phone, 20);
@@ -154,6 +217,17 @@ export function validatePhone(phone: string): string {
 
 /**
  * Validates limit parameter for pagination
+ * @param limit - The limit value to validate (can be string, number, or undefined)
+ * @param defaultLimit - Default value if limit is invalid (default: 15)
+ * @param maxLimit - Maximum allowed value (default: 50)
+ * @returns Validated limit number between 1 and maxLimit
+ * @example
+ * ```ts
+ * const limit = validateLimit('20', 15, 50);
+ * // Returns: 20
+ * const limit2 = validateLimit('100', 15, 50);
+ * // Returns: 50 (capped at maxLimit)
+ * ```
  */
 export function validateLimit(limit: unknown, defaultLimit: number = 15, maxLimit: number = 50): number {
     if (limit === undefined || limit === null || limit === '') {

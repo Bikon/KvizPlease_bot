@@ -10,17 +10,9 @@ dayjs.locale('ru');
 const MOSCOW_TZ = 'Europe/Moscow';
 
 /**
- * Formats a date in Moscow timezone
- * @param date - Date object or date string
- * @param format - dayjs format string (default: 'DD.MM.YYYY HH:mm')
- * @returns Formatted date string in Moscow timezone
- */
-export function formatInMoscowTz(date: Date | string, format: string = 'DD.MM.YYYY HH:mm'): string {
-    return dayjs(date).tz(MOSCOW_TZ).format(format);
-}
-
-/**
- * Pads a number with leading zero
+ * Pads a number with leading zero to 2 digits
+ * @param n - The number to pad
+ * @returns Padded string (e.g., 5 -> "05", 12 -> "12")
  */
 export function pad(n: number): string {
     return String(n).padStart(2, '0');

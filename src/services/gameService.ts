@@ -23,6 +23,14 @@ function extractGroupKey(title: string) {
     return { groupKey: `${typeName}#${num}`, typeName, number: num };
 }
 
+/**
+ * Internal function to synchronize games from a source URL
+ * Fetches HTML, parses games, filters by excluded types, and upserts to database
+ * @param chatId - The chat ID to sync games for
+ * @param sourceUrl - The URL to fetch games from
+ * @returns Object with counts of added, skipped, and excluded games
+ * @throws {Error} If HTML fetch or parsing fails
+ */
 async function syncGamesInternal(chatId: string, sourceUrl: string): Promise<{ added: number; skipped: number; excluded: number }> {
     const html = await grabPageHtmlWithFilters(sourceUrl);
     log.info(`[Chat ${chatId}] HTML grabbed & full list loaded`);
@@ -61,16 +69,33 @@ async function syncGamesInternal(chatId: string, sourceUrl: string): Promise<{ a
 // Initialize queue with the sync function
 syncQueue.setSyncFunction(syncGamesInternal);
 
+/**
+ * Synchronizes games from a source URL using a queue system
+ * Prevents concurrent syncs for the same chat and limits overall concurrency
+ * @param chatId - The chat ID to sync games for
+ * @param sourceUrl - The URL to fetch games from
+ * @returns Promise that resolves with sync results
+ */
 export async function syncGames(chatId: string, sourceUrl: string): Promise<{ added: number; skipped: number; excluded: number }> {
     const status = syncQueue.getStatus();
     log.info(`[Chat ${chatId}] Sync requested. Queue status: ${status.running}/${status.maxConcurrency} running, ${status.queued} queued`);
     return await syncQueue.enqueue(chatId, sourceUrl);
 }
 
+/**
+ * Gets filtered upcoming games for a chat using configured filters
+ * @param chatId - The chat ID to get games for
+ * @returns Promise that resolves to array of upcoming games
+ */
 export async function getFilteredUpcoming(chatId: string) {
     return await findUpcomingGames(config.filters.daysAhead, config.filters.districts, chatId);
 }
 
+/**
+ * Gets upcoming game groups for a chat using configured filters
+ * @param chatId - The chat ID to get groups for
+ * @returns Promise that resolves to array of game groups
+ */
 export async function getUpcomingGroups(chatId: string) {
     return await findUpcomingGroups(config.filters.daysAhead, config.filters.districts, chatId);
 }

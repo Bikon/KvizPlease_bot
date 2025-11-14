@@ -48,23 +48,25 @@ function startCleanupInterval() {
 // Start cleanup on module load
 startCleanupInterval();
 
-// Graceful shutdown
-process.once('SIGTERM', () => {
+// Graceful shutdown handler
+function cleanupOnShutdown() {
     if (cleanupInterval) {
         clearInterval(cleanupInterval);
         cleanupInterval = null;
         cleanupStarted = false;
     }
-});
+}
 
-process.once('SIGINT', () => {
-    if (cleanupInterval) {
-        clearInterval(cleanupInterval);
-        cleanupInterval = null;
-        cleanupStarted = false;
-    }
-});
+process.once('SIGTERM', cleanupOnShutdown);
+process.once('SIGINT', cleanupOnShutdown);
 
+/**
+ * Sets conversation state for a chat
+ * State will automatically expire after TTL (30 minutes)
+ * @param chatId - The chat ID to set state for
+ * @param step - The current step in the conversation
+ * @param data - Optional data to store with the state
+ */
 export function setConversationState(chatId: string, step: string, data: Record<string, any> = {}) {
     states.set(chatId, { 
         state: { step, data },
@@ -72,6 +74,12 @@ export function setConversationState(chatId: string, step: string, data: Record<
     });
 }
 
+/**
+ * Gets the current conversation state for a chat
+ * Returns undefined if state doesn't exist or has expired
+ * @param chatId - The chat ID to get state for
+ * @returns The conversation state or undefined
+ */
 export function getConversationState(chatId: string): ConversationState | undefined {
     const entry = states.get(chatId);
     if (!entry) return undefined;
@@ -85,16 +93,12 @@ export function getConversationState(chatId: string): ConversationState | undefi
     return entry.state;
 }
 
+/**
+ * Clears conversation state for a chat
+ * @param chatId - The chat ID to clear state for
+ */
 export function clearConversationState(chatId: string) {
     states.delete(chatId);
 }
 
-export function updateConversationData(chatId: string, newData: Record<string, any>) {
-    const entry = states.get(chatId);
-    if (entry) {
-        entry.state.data = { ...entry.state.data, ...newData };
-        entry.expires = Date.now() + TTL_MS; // Reset TTL on update
-        states.set(chatId, entry);
-    }
-}
 

@@ -72,6 +72,11 @@ import { toggleSelectedPoll, getSelectedPolls, toggleSelectedGame, getSelectedGa
 import { registerForGame } from './services/registrationService.js';
 import type { DbGame } from './types.js';
 
+/**
+ * Extracts and validates chat ID from a Telegram context
+ * @param ctx - The Telegram context object
+ * @returns Validated chat ID as string
+ */
 function getChatId(ctx: Context): string {
     const rawId = ctx.chat?.id ??
         ctx.update?.message?.chat?.id ??
@@ -86,11 +91,22 @@ function getChatId(ctx: Context): string {
     }
 }
 
+/**
+ * Parses and validates a limit parameter from command arguments
+ * @param text - The text to parse (can be undefined)
+ * @param def - Default limit if parsing fails
+ * @returns Validated limit number
+ */
 function parseLimit(text: string | undefined, def = config.limits.defaultUpcomingLimit): number {
     return validateLimitUtil(text, def, config.limits.maxUpcomingLimit);
 }
 
-// Формат одной игры (ровно как у вас раньше)
+/**
+ * Formats a single game for display
+ * @param g - The game object to format
+ * @param idx - The index number for the game
+ * @returns Formatted game string
+ */
 function formatGame(g: DbGame, idx: number): string {
     const { dd, mm, yyyy, hh, mi } = formatGameDateTime(g.date_time);
     const place = g.venue ?? '-';
@@ -225,11 +241,46 @@ async function sendUpcoming(
     }
 }
 
+/**
+ * Truncates text to a maximum length with ellipsis
+ * @param text - The text to truncate
+ * @param maxLength - Maximum length (default: 48)
+ * @returns Truncated text with ellipsis if needed
+ */
 function truncateText(text: string, maxLength = 48): string {
     if (text.length <= maxLength) return text;
     return `${text.slice(0, maxLength - 1)}…`;
 }
 
+/**
+ * Refreshes the types keyboard after exclude/unexclude operations
+ */
+async function refreshTypesKeyboard(ctx: Context) {
+    const chatId = getChatId(ctx);
+    const rows = await getUpcomingGroups(chatId);
+    const allTypes = Array.from(new Set(rows.map((r) => String(r.type_name))));
+    const excluded = new Set(await listExcludedTypes(chatId));
+    const kb = buildTypesKeyboard(allTypes, excluded);
+    await ctx.editMessageReplyMarkup({ reply_markup: kb });
+}
+
+/**
+ * Finds winning options from poll votes
+ */
+function findWinningOptions(optionVotes: PollOptionVotes[]) {
+    const validOptions = optionVotes.filter(opt => !opt.is_unavailable && opt.game_external_id);
+    const maxVotes = Math.max(...validOptions.map(opt => opt.vote_count), 0);
+    const winners = validOptions.filter(opt => opt.vote_count === maxVotes && opt.vote_count >= 2);
+    return { validOptions, maxVotes, winners };
+}
+
+/**
+ * Builds poll selection items with optimized batch fetching
+ * Avoids N+1 queries by batching all database operations
+ * @param chatId - The chat ID to build items for
+ * @param polls - Array of polls with vote counts
+ * @returns Array of poll selection items with labels
+ */
 async function buildPollSelectionItems(chatId: string, polls: PollWithVotes[]) {
     const items: Array<{ poll_id: string; label: string; vote_count: number }> = [];
 
@@ -405,7 +456,7 @@ export function createBot() {
         try {
             await ctx.reply('🔄 Синхронизация началась, это может занять от 2 до 6 минут…');
             
-            // Получаем текущее количество игр перед синком (с учётом фильтров)
+            // Получаем текущее количество игр перед синхронизацией (с учётом фильтров)
             const beforeCount = await countAllUpcomingGames(chatId, config.filters.daysAhead, config.filters.districts);
             
             // Удаляем устаревшие игры
@@ -415,7 +466,7 @@ export function createBot() {
             
             await ctx.reply('✅ Синхронизация завершена.');
             
-            // Получаем количество после синка (с учётом фильтров)
+            // Получаем количество после синхронизации (с учётом фильтров)
             const afterCount = await countAllUpcomingGames(chatId, config.filters.daysAhead, config.filters.districts);
             const newGamesCount = Math.max(0, afterCount - beforeCount);
             
@@ -1179,22 +1230,14 @@ export function createBot() {
                 const t = resolveButtonId(buttonId);
                 if (!t) return await ctx.answerCallbackQuery({ text: 'Ошибка: кнопка устарела' });
                 await excludeType(getChatId(ctx), t);
-                const rows = await getUpcomingGroups(getChatId(ctx));
-                const allTypes = Array.from(new Set(rows.map((r) => String(r.type_name))));
-                const excluded = new Set(await listExcludedTypes(getChatId(ctx)));
-                const kb = buildTypesKeyboard(allTypes, excluded);
-                await ctx.editMessageReplyMarkup({ reply_markup: kb });
+                await refreshTypesKeyboard(ctx);
                 await ctx.answerCallbackQuery({ text: `Тип «${t}» исключён` });
             } else if (data.startsWith(CB.TYPE_UNEXCLUDE)) {
                 const buttonId = data.slice(CB.TYPE_UNEXCLUDE.length);
                 const t = resolveButtonId(buttonId);
                 if (!t) return await ctx.answerCallbackQuery({ text: 'Ошибка: кнопка устарела' });
                 await unexcludeType(getChatId(ctx), t);
-                const rows = await getUpcomingGroups(getChatId(ctx));
-                const allTypes = Array.from(new Set(rows.map((r) => String(r.type_name))));
-                const excluded = new Set(await listExcludedTypes(getChatId(ctx)));
-                const kb = buildTypesKeyboard(allTypes, excluded);
-                await ctx.editMessageReplyMarkup({ reply_markup: kb });
+                await refreshTypesKeyboard(ctx);
                 await ctx.answerCallbackQuery({ text: `Тип «${t}» возвращён` });
             } else if (data.startsWith(CB.PLAYED_MARK)) {
                 const buttonId = data.slice(CB.PLAYED_MARK.length);
@@ -1245,13 +1288,7 @@ export function createBot() {
                 
                 for (const pollId of selectedPolls) {
                     const optionVotes = await getPollOptionVotes(pollId);
-                    
-                    // Find max vote count (excluding unavailable)
-                    const validOptions = optionVotes.filter(opt => !opt.is_unavailable && opt.game_external_id);
-                    const maxVotes = Math.max(...validOptions.map(opt => opt.vote_count), 0);
-
-                    // Get all options with max votes (can be multiple winners)
-                    const winners = validOptions.filter(opt => opt.vote_count === maxVotes && opt.vote_count >= 2);
+                    const { winners } = findWinningOptions(optionVotes);
 
                     for (const winner of winners) {
                         if (!winner.game_external_id) continue;
@@ -1321,9 +1358,7 @@ export function createBot() {
                 
                 for (const pollId of selectedPolls) {
                     const optionVotes = await getPollOptionVotes(pollId);
-                    const validOptions = optionVotes.filter(opt => !opt.is_unavailable && opt.game_external_id);
-                    const maxVotes = Math.max(...validOptions.map(opt => opt.vote_count), 0);
-                    const winners = validOptions.filter(opt => opt.vote_count === maxVotes && opt.vote_count >= 2);
+                    const { winners } = findWinningOptions(optionVotes);
                     
                     for (const winner of winners) {
                         if (!winner.game_external_id) continue;
@@ -1472,8 +1507,9 @@ export function createBot() {
 
     bot.on('poll_answer', async (ctx) => {
         const pollAnswer = ctx.update.poll_answer;
-        if (!pollAnswer.user) return;
-        await handlePollAnswer(pollAnswer as { poll_id: string; user: { id: number }; option_ids: number[] });
+        if (pollAnswer) {
+            await handlePollAnswer(pollAnswer);
+        }
     });
 
     // Handle text messages for custom date dialog

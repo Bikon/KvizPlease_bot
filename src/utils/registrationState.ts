@@ -49,22 +49,17 @@ function startCleanupInterval() {
 
 startCleanupInterval();
 
-// Graceful shutdown
-process.once('SIGTERM', () => {
+// Graceful shutdown handler
+function cleanupOnShutdown() {
     if (cleanupInterval) {
         clearInterval(cleanupInterval);
         cleanupInterval = null;
         cleanupStarted = false;
     }
-});
+}
 
-process.once('SIGINT', () => {
-    if (cleanupInterval) {
-        clearInterval(cleanupInterval);
-        cleanupInterval = null;
-        cleanupStarted = false;
-    }
-});
+process.once('SIGTERM', cleanupOnShutdown);
+process.once('SIGINT', cleanupOnShutdown);
 
 function getOrCreateEntry(map: Map<string, RegistrationStateEntry>, chatId: string): RegistrationStateEntry {
     let entry = map.get(chatId);

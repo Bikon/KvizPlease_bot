@@ -11,4 +11,3 @@ export const CITIES = {
     'rostov': { name: 'Ростов-на-Дону', url: 'https://rostov.quizplease.ru/schedule' },
 } as const;
 
-export type CityKey = keyof typeof CITIES;
