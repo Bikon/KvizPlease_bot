@@ -70,6 +70,13 @@ CREATE TABLE IF NOT EXISTS excluded_types (
 CREATE INDEX IF NOT EXISTS idx_games_chat_datetime ON games(chat_id, date_time);
 CREATE INDEX IF NOT EXISTS idx_games_chat_group ON games(chat_id, group_key);
 CREATE INDEX IF NOT EXISTS idx_games_flags ON games(played, excluded);
+CREATE INDEX IF NOT EXISTS idx_games_chat_datetime_group ON games(chat_id, date_time, group_key);
+CREATE INDEX IF NOT EXISTS idx_games_external_id ON games(external_id);
+CREATE INDEX IF NOT EXISTS idx_polls_chat_id ON polls(chat_id);
+CREATE INDEX IF NOT EXISTS idx_polls_group_key ON polls(group_key);
+CREATE INDEX IF NOT EXISTS idx_poll_options_poll_id ON poll_options(poll_id);
+CREATE INDEX IF NOT EXISTS idx_poll_votes_poll_id ON poll_votes(poll_id);
+CREATE INDEX IF NOT EXISTS idx_chat_settings_chat_id_key ON chat_settings(chat_id, key);
 
 CREATE TABLE IF NOT EXISTS app_settings (
     key TEXT PRIMARY KEY,

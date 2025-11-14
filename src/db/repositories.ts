@@ -3,6 +3,7 @@ import path from 'node:path';
 
 import { pool } from './pool.js';
 import type { Game } from '../types.js';
+import { log } from '../utils/logger.js';
 
 export { pool };
 
@@ -21,24 +22,53 @@ async function ensurePollVotesUserNameColumn() {
     pollVotesUserNameColumnEnsured = true;
 }
 
-const upsertSqlPath = path.resolve(process.cwd(), 'sql', 'upsert_game.sql');
-let UPSERT_SQL = '';
-(async () => { UPSERT_SQL = await fs.readFile(upsertSqlPath, 'utf8'); })();
+let UPSERT_SQL: string | null = null;
+let upsertSqlLoadPromise: Promise<string> | null = null;
+
+async function ensureUpsertSql(): Promise<string> {
+    if (UPSERT_SQL) return UPSERT_SQL;
+    
+    // If already loading, wait for that promise
+    if (upsertSqlLoadPromise) {
+        return await upsertSqlLoadPromise;
+    }
+    
+    // Start loading
+    upsertSqlLoadPromise = (async () => {
+        try {
+            const upsertSqlPath = path.resolve(process.cwd(), 'sql', 'upsert_game.sql');
+            const sql = await fs.readFile(upsertSqlPath, 'utf8');
+            if (!sql || sql.trim().length === 0) {
+                throw new Error('upsert_game.sql is empty or could not be read');
+            }
+            UPSERT_SQL = sql;
+            return sql;
+        } catch (error) {
+            log.error('Failed to load upsert_game.sql:', error);
+            throw new Error(`Failed to load SQL file: ${error instanceof Error ? error.message : String(error)}`);
+        } finally {
+            upsertSqlLoadPromise = null;
+        }
+    })();
+    
+    return await upsertSqlLoadPromise;
+}
 
 // базовый UPSERT игры
 export async function upsertGame(game: Game, chatId: string, sourceUrl: string) {
     const {
         externalId, title, dateTime, venue, district, address, price, difficulty, status, url, groupKey
     } = game;
-    await pool.query(UPSERT_SQL, [
+    const sql = await ensureUpsertSql();
+    await pool.query(sql, [
         chatId, externalId, title, dateTime, venue ?? null, district ?? null, address ?? null,
         price ?? null, difficulty ?? null, status ?? null, url, groupKey ?? null, sourceUrl
     ]);
 }
 
 // получить все будущие игры с учётом флагов и исключений
-export async function findUpcomingGames(daysAhead: number, allowedDistricts: string[], chatId: string) {
-    const res = await pool.query(
+export async function findUpcomingGames(daysAhead: number, allowedDistricts: string[], chatId: string): Promise<DbGame[]> {
+    const res = await pool.query<DbGame>(
         `SELECT g.*
          FROM games g
                   LEFT JOIN excluded_groups eg ON eg.group_key = g.group_key
@@ -55,7 +85,7 @@ export async function findUpcomingGames(daysAhead: number, allowedDistricts: str
          ORDER BY g.group_key NULLS LAST, g.date_time ASC`,
         [String(daysAhead), allowedDistricts.length ? allowedDistricts : null, chatId]
     );
-    return res.rows as any[];
+    return res.rows;
 }
 
 // получить количество всех будущих игр с учётом основных фильтров (для точной статистики синхронизации)

@@ -1,5 +1,6 @@
 /**
  * Simple conversation state manager for multi-step conversations
+ * Includes TTL to prevent memory leaks
  */
 
 interface ConversationState {
@@ -7,14 +8,62 @@ interface ConversationState {
     data: Record<string, any>;
 }
 
-const states = new Map<string, ConversationState>();
+interface StateEntry {
+    state: ConversationState;
+    expires: number;
+}
+
+const states = new Map<string, StateEntry>();
+
+// TTL: 30 minutes
+const TTL_MS = 30 * 60 * 1000;
+
+// Cleanup interval: every 5 minutes
+const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
+
+// Start cleanup interval
+let cleanupInterval: NodeJS.Timeout | null = null;
+
+function startCleanupInterval() {
+    if (cleanupInterval) return;
+    
+    cleanupInterval = setInterval(() => {
+        const now = Date.now();
+        let cleaned = 0;
+        for (const [chatId, entry] of states.entries()) {
+            if (entry.expires < now) {
+                states.delete(chatId);
+                cleaned++;
+            }
+        }
+        if (cleaned > 0) {
+            // Log only if we actually cleaned something
+            // This prevents log spam
+        }
+    }, CLEANUP_INTERVAL_MS);
+}
+
+// Start cleanup on module load
+startCleanupInterval();
 
 export function setConversationState(chatId: string, step: string, data: Record<string, any> = {}) {
-    states.set(chatId, { step, data });
+    states.set(chatId, { 
+        state: { step, data },
+        expires: Date.now() + TTL_MS
+    });
 }
 
 export function getConversationState(chatId: string): ConversationState | undefined {
-    return states.get(chatId);
+    const entry = states.get(chatId);
+    if (!entry) return undefined;
+    
+    // Check if expired
+    if (entry.expires < Date.now()) {
+        states.delete(chatId);
+        return undefined;
+    }
+    
+    return entry.state;
 }
 
 export function clearConversationState(chatId: string) {
@@ -22,9 +71,11 @@ export function clearConversationState(chatId: string) {
 }
 
 export function updateConversationData(chatId: string, newData: Record<string, any>) {
-    const current = states.get(chatId);
-    if (current) {
-        current.data = { ...current.data, ...newData };
-        states.set(chatId, current);
+    const entry = states.get(chatId);
+    if (entry) {
+        entry.state.data = { ...entry.state.data, ...newData };
+        entry.expires = Date.now() + TTL_MS; // Reset TTL on update
+        states.set(chatId, entry);
     }
 }
+

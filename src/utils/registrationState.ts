@@ -1,22 +1,81 @@
 // Store selected polls and games for registration flow
-const selectedPollsMap = new Map<string, Set<string>>();
-const selectedGamesMap = new Map<string, Set<string>>();
-const pollGameMappingMap = new Map<string, Map<string, number>>(); // chatId -> (gameExternalId -> voteCount)
+// Includes TTL to prevent memory leaks
+interface RegistrationStateEntry {
+    selected: Set<string>;
+    expires: number;
+}
+
+interface PollGameMappingEntry {
+    mapping: Map<string, number>;
+    expires: number;
+}
+
+const selectedPollsMap = new Map<string, RegistrationStateEntry>();
+const selectedGamesMap = new Map<string, RegistrationStateEntry>();
+const pollGameMappingMap = new Map<string, PollGameMappingEntry>(); // chatId -> (gameExternalId -> voteCount)
+
+// TTL: 1 hour (registration flow can take time)
+const TTL_MS = 60 * 60 * 1000;
+
+// Cleanup interval: every 10 minutes
+const CLEANUP_INTERVAL_MS = 10 * 60 * 1000;
+
+let cleanupInterval: NodeJS.Timeout | null = null;
+
+function startCleanupInterval() {
+    if (cleanupInterval) return;
+    
+    cleanupInterval = setInterval(() => {
+        const now = Date.now();
+        for (const [chatId, entry] of selectedPollsMap.entries()) {
+            if (entry.expires < now) {
+                selectedPollsMap.delete(chatId);
+            }
+        }
+        for (const [chatId, entry] of selectedGamesMap.entries()) {
+            if (entry.expires < now) {
+                selectedGamesMap.delete(chatId);
+            }
+        }
+        for (const [chatId, entry] of pollGameMappingMap.entries()) {
+            if (entry.expires < now) {
+                pollGameMappingMap.delete(chatId);
+            }
+        }
+    }, CLEANUP_INTERVAL_MS);
+}
+
+startCleanupInterval();
+
+function getOrCreateEntry(map: Map<string, RegistrationStateEntry>, chatId: string): RegistrationStateEntry {
+    let entry = map.get(chatId);
+    if (!entry || entry.expires < Date.now()) {
+        entry = {
+            selected: new Set(),
+            expires: Date.now() + TTL_MS
+        };
+        map.set(chatId, entry);
+    }
+    return entry;
+}
 
 export function toggleSelectedPoll(chatId: string, pollId: string): void {
-    if (!selectedPollsMap.has(chatId)) {
-        selectedPollsMap.set(chatId, new Set());
-    }
-    const selected = selectedPollsMap.get(chatId)!;
-    if (selected.has(pollId)) {
-        selected.delete(pollId);
+    const entry = getOrCreateEntry(selectedPollsMap, chatId);
+    if (entry.selected.has(pollId)) {
+        entry.selected.delete(pollId);
     } else {
-        selected.add(pollId);
+        entry.selected.add(pollId);
     }
+    entry.expires = Date.now() + TTL_MS; // Reset TTL on update
 }
 
 export function getSelectedPolls(chatId: string): Set<string> {
-    return selectedPollsMap.get(chatId) || new Set();
+    const entry = selectedPollsMap.get(chatId);
+    if (!entry || entry.expires < Date.now()) {
+        if (entry) selectedPollsMap.delete(chatId);
+        return new Set();
+    }
+    return entry.selected;
 }
 
 export function clearSelectedPolls(chatId: string): void {
@@ -24,19 +83,22 @@ export function clearSelectedPolls(chatId: string): void {
 }
 
 export function toggleSelectedGame(chatId: string, gameExternalId: string): void {
-    if (!selectedGamesMap.has(chatId)) {
-        selectedGamesMap.set(chatId, new Set());
-    }
-    const selected = selectedGamesMap.get(chatId)!;
-    if (selected.has(gameExternalId)) {
-        selected.delete(gameExternalId);
+    const entry = getOrCreateEntry(selectedGamesMap, chatId);
+    if (entry.selected.has(gameExternalId)) {
+        entry.selected.delete(gameExternalId);
     } else {
-        selected.add(gameExternalId);
+        entry.selected.add(gameExternalId);
     }
+    entry.expires = Date.now() + TTL_MS; // Reset TTL on update
 }
 
 export function getSelectedGames(chatId: string): Set<string> {
-    return selectedGamesMap.get(chatId) || new Set();
+    const entry = selectedGamesMap.get(chatId);
+    if (!entry || entry.expires < Date.now()) {
+        if (entry) selectedGamesMap.delete(chatId);
+        return new Set();
+    }
+    return entry.selected;
 }
 
 export function clearSelectedGames(chatId: string): void {
@@ -45,11 +107,19 @@ export function clearSelectedGames(chatId: string): void {
 
 // Store game vote counts during registration flow
 export function setPollGameMapping(chatId: string, mapping: Map<string, number>): void {
-    pollGameMappingMap.set(chatId, mapping);
+    pollGameMappingMap.set(chatId, {
+        mapping,
+        expires: Date.now() + TTL_MS
+    });
 }
 
 export function getPollGameMapping(chatId: string): Map<string, number> {
-    return pollGameMappingMap.get(chatId) || new Map();
+    const entry = pollGameMappingMap.get(chatId);
+    if (!entry || entry.expires < Date.now()) {
+        if (entry) pollGameMappingMap.delete(chatId);
+        return new Map();
+    }
+    return entry.mapping;
 }
 
 export function clearPollGameMapping(chatId: string): void {

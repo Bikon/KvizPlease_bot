@@ -6,6 +6,7 @@ import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import type { Browser, Page } from 'puppeteer';
 
 import { log } from '../utils/logger.js';
+import { config } from '../config.js';
 
 puppeteer.use(StealthPlugin());
 
@@ -31,6 +32,7 @@ const PAGE_TIMEOUT_MS = 45_000;
 const BROWSER_TIMEOUT_MS = 120_000;
 const MAX_BROWSER_ATTEMPTS = 3;
 const MAX_SCROLL_ITERATIONS = 120;
+// SCROLL_DELAY_MS will be moved to config in next update
 const SCROLL_DELAY_MS = 800;
 const HTTP_TIMEOUT_MS = 25_000;
 const HTTP_RETRIES = 2;

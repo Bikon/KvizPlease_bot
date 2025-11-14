@@ -3,6 +3,7 @@ import { Bot } from 'grammy';
 import { insertPoll, mapPollOption, pollExists, upsertVote } from '../db/repositories.js';
 import { formatGameDateTime } from '../utils/dateFormatter.js';
 import { log } from '../utils/logger.js';
+import { config } from '../config.js';
 
 // Нейминг опросов:
 // - Классика: "Квиз, плиз (Классика) #1217"
@@ -76,8 +77,8 @@ export async function createPollsByDateRange(bot: Bot, chatId: string | number, 
         return `${dd}.${mm}`;
     };
     
-    // Разбиваем на чанки по 9 игр (оставляем место для "не смогу")
-    const chunkSize = 9;
+    // Разбиваем на чанки (оставляем место для "не смогу")
+    const chunkSize = config.limits.pollChunkSize;
     let pollsCreated = 0;
     
     for (let i = 0; i < sortedGames.length; i += chunkSize) {

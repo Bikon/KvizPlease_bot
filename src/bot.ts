@@ -5,6 +5,7 @@ import { config } from './config.js';
 import { CITIES } from './bot/cities.js';
 import { CB } from './bot/constants.js';
 import { resolveButtonId } from './bot/ui/buttonMapping.js';
+import { validateChatId, validateQuizPleaseUrl, ValidationError, validateLimit as validateLimitUtil, validateTeamName, validateCaptainName, validateEmail, validatePhone } from './utils/validation.js';
 import {
     buildCitySelectionKeyboard,
     buildGameSelectionKeyboard,
@@ -64,7 +65,6 @@ import { formatGameDateTime } from './utils/dateFormatter.js';
 import { filterGamesByTypes, getPollWordForm, sortGamesByDate } from './utils/gameFilters.js';
 import { log } from './utils/logger.js';
 import { parseDate, formatDateForDisplay, formatDateTimeForDisplay, validateDateRange } from './utils/dateParser.js';
-import { isValidEmail, validateAndNormalizePhone } from './utils/patterns.js';
 import { setConversationState, getConversationState, clearConversationState } from './utils/conversationState.js';
 import { toggleSelectedType, getSelectedTypes, clearSelectedTypes } from './utils/selectedTypes.js';
 import { toggleSelectedPoll, getSelectedPolls, toggleSelectedGame, getSelectedGames, setPollGameMapping, getPollGameMapping, clearAllRegistrationState } from './utils/registrationState.js';
@@ -72,18 +72,21 @@ import { registerForGame } from './services/registrationService.js';
 import type { DbGame } from './types.js';
 
 function getChatId(ctx: Context): string {
-    return String(
-        ctx.chat?.id ??
+    const rawId = ctx.chat?.id ??
         ctx.update?.message?.chat?.id ??
         ctx.update?.callback_query?.message?.chat?.id ??
-        ''
-    );
+        '';
+    
+    try {
+        return validateChatId(String(rawId));
+    } catch (error) {
+        // Fallback for invalid chat IDs (shouldn't happen in normal operation)
+        return String(rawId);
+    }
 }
 
-function parseLimit(text: string | undefined, def = 15) {
-    const n = text ? parseInt(text.trim(), 10) : NaN;
-    if (!Number.isFinite(n) || n <= 0) return def;
-    return Math.min(n, 50); // хардлимит, чтобы точно не упираться в 4096
+function parseLimit(text: string | undefined, def = config.limits.defaultUpcomingLimit): number {
+    return validateLimitUtil(text, def, config.limits.maxUpcomingLimit);
 }
 
 // Формат одной игры (ровно как у вас раньше)
@@ -126,13 +129,13 @@ function buildUpcomingChunk(
     const nextOffset = end < games.length ? end : null;
 
     // На всякий случай защитимся от лимита 4096 символов:
-    if (text.length <= 3800) return { text, nextOffset };
+    if (text.length <= config.limits.telegramMessageSafeLength) return { text, nextOffset };
 
     // Если вдруг слишком длинно даже для N — уменьшим порцию динамически
     let safeEnd = end;
-    while (safeEnd > offset + 1) {
+        while (safeEnd > offset + 1) {
         const t = parts.slice(0, safeEnd - offset).join('\n\n');
-        if (t.length <= 3800) return { text: t, nextOffset: safeEnd < games.length ? safeEnd : null };
+        if (t.length <= config.limits.telegramMessageSafeLength) return { text: t, nextOffset: safeEnd < games.length ? safeEnd : null };
         safeEnd--;
     }
     // упадём на 1 элемент — точно поместится
@@ -394,12 +397,7 @@ export function createBot() {
         const chatId = getChatId(ctx);
         if (!arg) return ctx.reply('Инструкция по использованию команды: /set_source [url страницы расписания]');
         try {
-            const u = new URL(arg);
-            
-            // Проверяем, что это ссылка на расписание Квиз Плиз
-            if (!u.hostname.includes('quizplease.ru') || !u.pathname.includes('/schedule')) {
-                return ctx.reply('Похоже, вы прислали не ту ссылку. Перейдите в раздел «Расписание» на официальном сайте Квиз Плиз для вашего города и пришлите ссылку.');
-            }
+            const u = validateQuizPleaseUrl(arg);
             
             const currentUrl = await getChatSetting(chatId, 'source_url');
             
@@ -413,8 +411,12 @@ export function createBot() {
             await setChatSetting(chatId, 'source_url', u.toString());
             await ctx.reply('Источник сохранён. Теперь можно запустить синхронизацию расписания игр /sync.');
             await updateChatCommands(bot, chatId, true);
-        } catch {
-            await ctx.reply('Некорректная ссылка. Пришлите полноценный URL со страницы расписания официального сайта Квиз Плиз вашего города');
+        } catch (error) {
+            if (error instanceof ValidationError) {
+                await ctx.reply(`❌ ${error.message}`);
+            } else {
+                await ctx.reply('Некорректная ссылка. Пришлите полноценный URL со страницы расписания официального сайта Квиз Плиз вашего города');
+            }
         }
     });
 
@@ -447,7 +449,7 @@ export function createBot() {
     bot.command('upcoming', async (ctx) => {
         try {
             const arg = (ctx.match as string | undefined) ?? '';
-            const limit = parseLimit(arg, 15);
+            const limit = parseLimit(arg, config.limits.defaultUpcomingLimit);
             const chatId = getChatId(ctx);
 
             const games = await getFilteredUpcoming(chatId);
@@ -730,7 +732,7 @@ export function createBot() {
 
     bot.command('manage_status', async (ctx) => {
         const arg = (ctx.match as string | undefined)?.trim() || '';
-        const limit = parseLimit(arg, 15); // for consistency if we reuse later
+        const limit = parseLimit(arg, config.limits.defaultUpcomingLimit); // for consistency if we reuse later
         void limit;
 
         await ctx.reply(
@@ -1338,7 +1340,7 @@ export function createBot() {
                     }
                     
                     // Small delay between registrations
-                    await new Promise(resolve => setTimeout(resolve, 2000));
+                    await new Promise(resolve => setTimeout(resolve, config.delays.registrationBetweenGames));
                 }
                 
                 const pollsWereMarked = failed === 0;
@@ -1524,75 +1526,82 @@ export function createBot() {
                     await ctx.reply('❌ Нет игр в выбранном периоде.');
                 }
             } else if (state.step === 'team_info_name') {
-                const teamName = text.trim();
-                if (!teamName || teamName.length < 2) {
-                    await ctx.reply('❌ Название команды слишком короткое. Попробуйте снова или отправьте /cancel для отмены.');
-                    return;
-                }
-                
-                log.info(`[Team Info] Chat ${chatId} - team name accepted: ${teamName}`);
-                setConversationState(chatId, 'team_info_captain', { team_name: teamName });
-                
-                await ctx.reply(
-                    `✅ Название команды: ${teamName}\n\n` +
-                    '📝 Шаг 2/4: Введите имя капитана команды:'
-                );
-            } else if (state.step === 'team_info_captain') {
-                const captainName = text.trim();
-                if (!captainName || captainName.length < 2) {
-                    await ctx.reply('❌ Имя капитана слишком короткое. Попробуйте снова или отправьте /cancel для отмены.');
-                    return;
-                }
-                
-                log.info(`[Team Info] Chat ${chatId} - captain name accepted: ${captainName}`);
-                setConversationState(chatId, 'team_info_email', { 
-                    team_name: state.data.team_name,
-                    captain_name: captainName 
-                });
-                
-                await ctx.reply(
-                    `✅ Капитан: ${captainName}\n\n` +
-                    '📝 Шаг 3/4: Введите email команды:\n' +
-                    'Например: team@example.com'
-                );
-            } else if (state.step === 'team_info_email') {
-                const email = text.trim();
-                if (!isValidEmail(email)) {
-                    await ctx.reply('❌ Некорректный email. Пожалуйста, введите корректный email (например: team@example.com) или отправьте /cancel для отмены.');
-                    return;
-                }
-                
-                log.info(`[Team Info] Chat ${chatId} - email accepted: ${email}`);
-                setConversationState(chatId, 'team_info_phone', { 
-                    team_name: state.data.team_name,
-                    captain_name: state.data.captain_name,
-                    email 
-                });
-                
-                await ctx.reply(
-                    `✅ Email: ${email}\n\n` +
-                    '📝 Шаг 4/4: Введите номер телефона капитана:\n' +
-                    'Можно в любом формате: +79991234567, 8-999-123-45-67, 9991234567'
-                );
-            } else if (state.step === 'team_info_phone') {
-                const normalizedPhone = validateAndNormalizePhone(text);
-                if (!normalizedPhone) {
-                    await ctx.reply('❌ Некорректный номер телефона. Пожалуйста, введите корректный номер (например: +79991234567 или 89991234567) или отправьте /cancel для отмены.');
-                    return;
-                }
-                
-                log.info(`[Team Info] Chat ${chatId} - phone accepted: ${normalizedPhone}`);
-                
-                const teamInfo: TeamInfo = {
-                    team_name: state.data.team_name,
-                    captain_name: state.data.captain_name,
-                    email: state.data.email,
-                    phone: normalizedPhone
-                };
-                
-                clearConversationState(chatId);
-                
                 try {
+                    const teamName = validateTeamName(text);
+                    log.info(`[Team Info] Chat ${chatId} - team name accepted: ${teamName}`);
+                    setConversationState(chatId, 'team_info_captain', { team_name: teamName });
+                    
+                    await ctx.reply(
+                        `✅ Название команды: ${teamName}\n\n` +
+                        '📝 Шаг 2/4: Введите имя капитана команды:'
+                    );
+                } catch (error) {
+                    if (error instanceof ValidationError) {
+                        await ctx.reply(`❌ ${error.message}. Попробуйте снова или отправьте /cancel для отмены.`);
+                    } else {
+                        await ctx.reply('❌ Ошибка при обработке названия команды. Попробуйте снова или отправьте /cancel для отмены.');
+                    }
+                    return;
+                }
+            } else if (state.step === 'team_info_captain') {
+                try {
+                    const captainName = validateCaptainName(text);
+                    log.info(`[Team Info] Chat ${chatId} - captain name accepted: ${captainName}`);
+                    setConversationState(chatId, 'team_info_email', { 
+                        team_name: state.data.team_name,
+                        captain_name: captainName 
+                    });
+                    
+                    await ctx.reply(
+                        `✅ Капитан: ${captainName}\n\n` +
+                        '📝 Шаг 3/4: Введите email команды:\n' +
+                        'Например: team@example.com'
+                    );
+                } catch (error) {
+                    if (error instanceof ValidationError) {
+                        await ctx.reply(`❌ ${error.message}. Попробуйте снова или отправьте /cancel для отмены.`);
+                    } else {
+                        await ctx.reply('❌ Ошибка при обработке имени капитана. Попробуйте снова или отправьте /cancel для отмены.');
+                    }
+                    return;
+                }
+            } else if (state.step === 'team_info_email') {
+                try {
+                    const email = validateEmail(text);
+                    log.info(`[Team Info] Chat ${chatId} - email accepted: ${email}`);
+                    setConversationState(chatId, 'team_info_phone', { 
+                        team_name: state.data.team_name,
+                        captain_name: state.data.captain_name,
+                        email 
+                    });
+                    
+                    await ctx.reply(
+                        `✅ Email: ${email}\n\n` +
+                        '📝 Шаг 4/4: Введите номер телефона капитана:\n' +
+                        'Можно в любом формате: +79991234567, 8-999-123-45-67, 9991234567'
+                    );
+                } catch (error) {
+                    if (error instanceof ValidationError) {
+                        await ctx.reply(`❌ ${error.message}. Попробуйте снова или отправьте /cancel для отмены.`);
+                    } else {
+                        await ctx.reply('❌ Некорректный email. Пожалуйста, введите корректный email (например: team@example.com) или отправьте /cancel для отмены.');
+                    }
+                    return;
+                }
+            } else if (state.step === 'team_info_phone') {
+                try {
+                    const normalizedPhone = validatePhone(text);
+                    log.info(`[Team Info] Chat ${chatId} - phone accepted: ${normalizedPhone}`);
+                
+                    const teamInfo: TeamInfo = {
+                        team_name: state.data.team_name,
+                        captain_name: state.data.captain_name,
+                        email: state.data.email,
+                        phone: normalizedPhone
+                    };
+                    
+                    clearConversationState(chatId);
+                    
                     await saveTeamInfo(chatId, teamInfo);
                     await ctx.reply(
                         '✅ Информация о команде сохранена!\n\n' +
@@ -1603,9 +1612,14 @@ export function createBot() {
                         'Для просмотра используйте /team_info\n' +
                         'Для изменения — /team_info_edit'
                     );
-                } catch (e) {
-                    log.error('[Team Info] Save error:', e);
-                    await ctx.reply('❌ Ошибка при сохранении данных. См. логи.');
+                } catch (error) {
+                    if (error instanceof ValidationError) {
+                        await ctx.reply(`❌ ${error.message}. Попробуйте снова или отправьте /cancel для отмены.`);
+                    } else {
+                        log.error('[Team Info] Save error:', error);
+                        await ctx.reply('❌ Ошибка при сохранении данных. См. логи.');
+                    }
+                    return;
                 }
             }
         } catch (e) {
