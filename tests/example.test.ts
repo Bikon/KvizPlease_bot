@@ -1,56 +1,27 @@
 /**
- * Example test file structure
+ * This file has been replaced by more comprehensive test files:
+ * - tests/validation.test.ts - Comprehensive validation tests
+ * - tests/dateFormatter.test.ts - Date formatting tests
+ * - tests/gameFilters.test.ts - Game filtering tests
+ * - tests/patterns.test.ts - Pattern matching tests
+ * - tests/pollService.test.ts - Poll service tests
+ * - tests/conversationState.test.ts - Conversation state tests
+ * - tests/selectedTypes.test.ts - Selected types tests
+ * - tests/registrationState.test.ts - Registration state tests
+ * - tests/syncQueue.test.ts - Sync queue tests
  * 
- * To run tests, install a test framework:
- * npm install --save-dev vitest @vitest/ui
- * 
- * Then add to package.json:
- * "scripts": {
- *   "test": "vitest",
- *   "test:ui": "vitest --ui"
- * }
+ * Run all tests with: npm test
+ * Run tests in watch mode: npm run test:watch
+ * Run tests with UI: npm run test:ui
+ * Generate coverage: npm run test:coverage
  */
 
-import { describe, it, expect } from 'vitest';
-import { validateChatId, validateEmail, validatePhone, ValidationError } from '../src/utils/validation.js';
+import { describe, it } from 'vitest';
 
-describe('Validation Utilities', () => {
-    describe('validateChatId', () => {
-        it('should validate correct chat ID', () => {
-            expect(validateChatId('123456789')).toBe('123456789');
-            expect(validateChatId('-1001234567890')).toBe('-1001234567890');
-        });
-
-        it('should throw ValidationError for invalid chat ID', () => {
-            expect(() => validateChatId('')).toThrow(ValidationError);
-            expect(() => validateChatId('abc')).toThrow(ValidationError);
-            expect(() => validateChatId(null)).toThrow(ValidationError);
-        });
-    });
-
-    describe('validateEmail', () => {
-        it('should validate correct email', () => {
-            expect(validateEmail('test@example.com')).toBe('test@example.com');
-            expect(validateEmail('USER@EXAMPLE.COM')).toBe('user@example.com');
-        });
-
-        it('should throw ValidationError for invalid email', () => {
-            expect(() => validateEmail('invalid')).toThrow(ValidationError);
-            expect(() => validateEmail('@example.com')).toThrow(ValidationError);
-        });
-    });
-
-    describe('validatePhone', () => {
-        it('should validate and normalize Russian phone numbers', () => {
-            expect(validatePhone('+79991234567')).toBe('+79991234567');
-            expect(validatePhone('89991234567')).toBe('+79991234567');
-            expect(validatePhone('79991234567')).toBe('+79991234567');
-        });
-
-        it('should throw ValidationError for invalid phone', () => {
-            expect(() => validatePhone('1234567890')).toThrow(ValidationError);
-            expect(() => validatePhone('+1234567890')).toThrow(ValidationError);
-        });
+describe('Example Test File', () => {
+    it('should be replaced by comprehensive test files', () => {
+        // This file is kept for documentation purposes
+        // All actual tests are in other test files
     });
 });
 
