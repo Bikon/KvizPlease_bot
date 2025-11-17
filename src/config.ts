@@ -14,11 +14,6 @@ export const config = {
         database: process.env.DB_NAME || 'quiz',
     },
     filters: {
-        districts: (process.env.DEFAULT_DISTRICTS || '')
-            .split(',')
-            .map(s => s.trim())
-            .filter(Boolean),
-        daysAhead: Number(process.env.DEFAULT_DAYS_AHEAD || 30),
         maxPollOptions: Math.min(Number(process.env.MAX_POLL_OPTIONS || 10), 10),
     }
 } as const;
