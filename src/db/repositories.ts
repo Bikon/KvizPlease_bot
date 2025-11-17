@@ -37,85 +37,79 @@ export async function upsertGame(game: Game, chatId: string, sourceUrl: string) 
 }
 
 // получить все будущие игры с учётом флагов и исключений
-export async function findUpcomingGames(daysAhead: number, allowedDistricts: string[], chatId: string) {
+export async function findUpcomingGames(chatId: string) {
     const res = await pool.query(
         `SELECT g.*
          FROM games g
                   LEFT JOIN excluded_groups eg ON eg.group_key = g.group_key
-                  LEFT JOIN chat_excluded_types cet  ON cet.type_name = split_part(g.group_key, '#', 1) AND cet.chat_id = $3
-                  LEFT JOIN chat_played_groups cpg ON cpg.group_key = g.group_key AND cpg.chat_id = $3
-         WHERE g.chat_id = $3
+                  LEFT JOIN chat_excluded_types cet  ON cet.type_name = split_part(g.group_key, '#', 1) AND cet.chat_id = $1
+                  LEFT JOIN chat_played_groups cpg ON cpg.group_key = g.group_key AND cpg.chat_id = $1
+         WHERE g.chat_id = $1
            AND g.date_time >= now()
-           AND g.date_time <= now() + ($1::text || ' days')::interval
-           AND (CASE WHEN $2::text[] IS NULL THEN true ELSE g.district = ANY($2) END)
            AND NOT g.excluded
            AND eg.group_key IS NULL
            AND cet.type_name IS NULL
            AND cpg.group_key IS NULL
          ORDER BY g.group_key NULLS LAST, g.date_time ASC`,
-        [String(daysAhead), allowedDistricts.length ? allowedDistricts : null, chatId]
+        [chatId]
     );
     return res.rows as any[];
 }
 
 // получить количество всех будущих игр с учётом основных фильтров (для точной статистики синхронизации)
-export async function countAllUpcomingGames(chatId: string, daysAhead: number = 30, allowedDistricts: string[] = []) {
+export async function countAllUpcomingGames(chatId: string) {
     const res = await pool.query(
         `SELECT COUNT(*) as count
          FROM games g
-         LEFT JOIN excluded_groups eg ON eg.group_key = g.group_key
-         LEFT JOIN chat_excluded_types cet ON cet.type_name = split_part(g.group_key, '#', 1) AND cet.chat_id = $1
-         LEFT JOIN chat_played_groups cpg ON cpg.group_key = g.group_key AND cpg.chat_id = $1
+             LEFT JOIN excluded_groups eg ON eg.group_key = g.group_key
+             LEFT JOIN chat_excluded_types cet ON cet.type_name = split_part(g.group_key, '#', 1) AND cet.chat_id = $1
+             LEFT JOIN chat_played_groups cpg ON cpg.group_key = g.group_key AND cpg.chat_id = $1
          WHERE g.chat_id = $1
            AND g.date_time >= now()
-           AND g.date_time <= now() + ($2::text || ' days')::interval
-           AND (CASE WHEN $3::text[] IS NULL THEN true ELSE g.district = ANY($3) END)
            AND NOT g.excluded
            AND eg.group_key IS NULL
            AND cet.type_name IS NULL
            AND cpg.group_key IS NULL`,
-        [chatId, String(daysAhead), allowedDistricts.length ? allowedDistricts : null]
+        [chatId]
     );
     return parseInt(res.rows[0]?.count || '0', 10);
 }
 
 // сгруппировать на стороне БД признаком group_key (для /groups)
-export async function findUpcomingGroups(daysAhead: number, allowedDistricts: string[], chatId: string) {
+export async function findUpcomingGroups(chatId: string) {
     const res = await pool.query(
         `WITH base AS (
-       SELECT g.*
-         FROM games g
-         LEFT JOIN excluded_groups eg ON eg.group_key = g.group_key
-         LEFT JOIN chat_excluded_types cet  ON cet.type_name = split_part(g.group_key, '#', 1) AND cet.chat_id = $3
-        WHERE g.chat_id = $3
-          AND g.date_time >= now()
-          AND g.date_time <= now() + ($1::text || ' days')::interval
-          AND (CASE WHEN $2::text[] IS NULL THEN true ELSE g.district = ANY($2) END)
-          AND NOT g.excluded
-          AND eg.group_key IS NULL
-          AND cet.type_name IS NULL
-     )
-     SELECT group_key,
-            split_part(group_key,'#',1) AS type_name,
-            split_part(group_key,'#',2) AS num,
-            EXISTS (
-                SELECT 1 FROM chat_played_groups cpg WHERE cpg.group_key = base.group_key AND cpg.chat_id = $3
-            ) as played,
-            COUNT(*) as cnt,
-            SUM(CASE WHEN base.registered = true THEN 1 ELSE 0 END) as registered_count,
-            EXISTS (
-                SELECT 1 FROM polls p WHERE p.group_key = base.group_key AND p.chat_id = $3
-            ) AS polled_by_package,
-            EXISTS (
-                SELECT 1 FROM games g2
-                JOIN poll_options po ON po.game_external_id = g2.external_id
-                JOIN polls p2 ON p2.poll_id = po.poll_id
-                WHERE g2.group_key = base.group_key AND g2.chat_id = $3 AND p2.chat_id = $3 AND p2.group_key IS NULL
-            ) AS polled_by_date
-       FROM base
-      GROUP BY group_key
-      ORDER BY type_name, CAST(NULLIF(split_part(group_key,'#',2),'') AS INT) NULLS LAST;`,
-        [String(daysAhead), allowedDistricts.length ? allowedDistricts : null, chatId]
+            SELECT g.*
+            FROM games g
+                     LEFT JOIN excluded_groups eg ON eg.group_key = g.group_key
+                     LEFT JOIN chat_excluded_types cet  ON cet.type_name = split_part(g.group_key, '#', 1) AND cet.chat_id = $1
+            WHERE g.chat_id = $1
+              AND g.date_time >= now()
+              AND NOT g.excluded
+              AND eg.group_key IS NULL
+              AND cet.type_name IS NULL
+        )
+         SELECT group_key,
+                split_part(group_key,'#',1) AS type_name,
+                split_part(group_key,'#',2) AS num,
+                EXISTS (
+                    SELECT 1 FROM chat_played_groups cpg WHERE cpg.group_key = base.group_key AND cpg.chat_id = $1
+                ) as played,
+                COUNT(*) as cnt,
+                SUM(CASE WHEN base.registered = true THEN 1 ELSE 0 END) as registered_count,
+                EXISTS (
+                    SELECT 1 FROM polls p WHERE p.group_key = base.group_key AND p.chat_id = $1
+                ) AS polled_by_package,
+                EXISTS (
+                    SELECT 1 FROM games g2
+                                      JOIN poll_options po ON po.game_external_id = g2.external_id
+                                      JOIN polls p2 ON p2.poll_id = po.poll_id
+                    WHERE g2.group_key = base.group_key AND g2.chat_id = $1 AND p2.chat_id = $1 AND p2.group_key IS NULL
+                ) AS polled_by_date
+         FROM base
+         GROUP BY group_key
+         ORDER BY type_name, CAST(NULLIF(split_part(group_key,'#',2),'') AS INT) NULLS LAST;`,
+        [chatId]
     );
     return res.rows;
 }

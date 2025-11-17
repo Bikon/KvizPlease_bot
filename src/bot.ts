@@ -343,7 +343,7 @@ export function createBot() {
             await ctx.reply('🔄 Синхронизация началась, это может занять от 2 до 6 минут…');
             
             // Получаем текущее количество игр перед синком (с учётом фильтров)
-            const beforeCount = await countAllUpcomingGames(chatId, config.filters.daysAhead, config.filters.districts);
+            const beforeCount = await countAllUpcomingGames(chatId);
             
             // Удаляем устаревшие игры
             const deletedPast = await deletePastGames(chatId);
@@ -353,7 +353,7 @@ export function createBot() {
             await ctx.reply('✅ Синхронизация завершена.');
             
             // Получаем количество после синка (с учётом фильтров)
-            const afterCount = await countAllUpcomingGames(chatId, config.filters.daysAhead, config.filters.districts);
+            const afterCount = await countAllUpcomingGames(chatId);
             const newGamesCount = Math.max(0, afterCount - beforeCount);
             
             let message;

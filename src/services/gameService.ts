@@ -63,9 +63,9 @@ export async function syncGames(chatId: string, sourceUrl: string): Promise<{ ad
 }
 
 export async function getFilteredUpcoming(chatId: string) {
-    return await findUpcomingGames(config.filters.daysAhead, config.filters.districts, chatId);
+    return await findUpcomingGames(chatId);
 }
 
 export async function getUpcomingGroups(chatId: string) {
-    return await findUpcomingGroups(config.filters.daysAhead, config.filters.districts, chatId);
+    return await findUpcomingGroups(chatId);
 }
