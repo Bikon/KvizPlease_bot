@@ -57,12 +57,32 @@ export async function handlePollAnswer(pollAnswer: any) {
 
 export async function createPollsByDateRange(bot: Bot, chatId: string | number, games: any[], startDate: Date, endDate: Date): Promise<number> {
     if (!games.length) return 0;
-    
+
+    // Нормализуем даты: начало дня для startDate, конец дня для endDate
+    // Используем UTC для консистентности с данными из БД
+    const rangeStart = new Date(Date.UTC(
+        startDate.getUTCFullYear(),
+        startDate.getUTCMonth(),
+        startDate.getUTCDate(),
+        0, 0, 0, 0
+    ));
+    const rangeEnd = new Date(Date.UTC(
+        endDate.getUTCFullYear(),
+        endDate.getUTCMonth(),
+        endDate.getUTCDate(),
+        23, 59, 59, 999
+    ));
+
     // Фильтруем игры в пределах периода
     const gamesInPeriod = games.filter(g => {
         const gameDate = new Date(g.date_time);
-        return gameDate >= startDate && gameDate <= endDate;
+        const gameTime = gameDate.getTime();
+        return gameTime >= rangeStart.getTime() && gameTime <= rangeEnd.getTime();
     });
+
+    if (gamesInPeriod.length === 0) {
+        log.warn(`[Polls] No games found in range ${rangeStart.toISOString()} to ${rangeEnd.toISOString()} (total games: ${games.length})`);
+    }
     
     if (!gamesInPeriod.length) return 0;
     
