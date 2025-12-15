@@ -166,10 +166,205 @@ async function clickLoadMore(page: Page): Promise<boolean> {
         });
 }
 
+/**
+ * Handle pagination for new layout (game-card with paginator)
+ * Collects HTML from all pages and combines them
+ */
+async function handlePaginationLayout(page: Page): Promise<string> {
+    // Get pagination info from first page
+    const paginationInfo = await page.evaluate(() => {
+        const paginator = document.querySelector('.game-pagination');
+        if (!paginator) return { maxPage: 1, baseUrl: window.location.href };
+
+        // Find max page number from paginator list
+        const pageItems = Array.from(paginator.querySelectorAll('.game-pagination__list-item p'))
+            .map(el => {
+                const text = el.textContent?.trim() || '';
+                const num = parseInt(text, 10);
+                return isNaN(num) ? 0 : num;
+            })
+            .filter(n => n > 0);
+        
+        const maxPage = pageItems.length > 0 ? Math.max(...pageItems) : 1;
+        const baseUrl = window.location.href.split('?')[0]; // Remove query params
+        
+        return { maxPage, baseUrl };
+    });
+
+    log.info(`[Scraper] Detected ${paginationInfo.maxPage} pages in paginator`);
+
+    // Get current URL to extract query params
+    const currentUrlString = page.url();
+    const currentUrl = new URL(currentUrlString);
+    const baseUrl = paginationInfo.baseUrl || currentUrl.origin + currentUrl.pathname;
+    const allPagesHtml: string[] = [];
+    
+    // Extract all statuses[] parameters from current URL string (URLSearchParams doesn't handle arrays well)
+    const statusesValues: string[] = [];
+    const urlSearch = currentUrlString.split('?')[1] || '';
+    if (urlSearch) {
+        // Parse statuses[] parameters manually
+        const statusesMatches = urlSearch.match(/statuses\[\]=(\d+)/g);
+        if (statusesMatches) {
+            statusesMatches.forEach(match => {
+                const value = match.match(/statuses\[\]=(\d+)/)?.[1];
+                if (value) {
+                    statusesValues.push(value);
+                }
+            });
+        }
+    }
+    
+    // Process all pages
+    for (let pageNum = 1; pageNum <= Math.min(paginationInfo.maxPage, MAX_SCROLL_ITERATIONS); pageNum++) {
+        if (pageNum > 1) {
+            // Navigate to next page
+            const nextPageUrl = new URL(baseUrl);
+            
+            // Preserve all query params except page and statuses
+            currentUrl.searchParams.forEach((value, key) => {
+                if (key !== 'page' && key !== 'statuses[]' && !key.startsWith('statuses')) {
+                    nextPageUrl.searchParams.set(key, value);
+                }
+            });
+            
+            // Add all statuses[] parameters properly
+            statusesValues.forEach(statusValue => {
+                nextPageUrl.searchParams.append('statuses[]', statusValue);
+            });
+            
+            nextPageUrl.searchParams.set('page', String(pageNum));
+            
+            log.info(`[Scraper] Navigating to page ${pageNum}: ${nextPageUrl.toString()}`);
+            
+            try {
+                await page.goto(nextPageUrl.toString(), { 
+                    waitUntil: 'networkidle2', 
+                    timeout: 30_000 
+                });
+                
+                // Wait for content to load
+                await page.waitForSelector('.game-card', { timeout: 15_000 });
+                await page.waitForNetworkIdle({ idleTime: 1000, timeout: 10_000 }).catch(() => {});
+                await delay(1000);
+            } catch (err) {
+                log.warn(`[Scraper] Failed to load page ${pageNum}:`, err);
+                break;
+            }
+        }
+
+        // Extract cards HTML directly from browser (more reliable than cheerio)
+        const pageCardsHtml = await page.evaluate(() => {
+            const cards: string[] = [];
+            
+            // Try to find wraps first
+            const wraps = Array.from(document.querySelectorAll('.game-card__wrap'))
+                .filter(wrap => {
+                    const card = wrap.querySelector('.game-card');
+                    return card && card.querySelector('.game-card__name-wrapper') !== null;
+                });
+            
+            if (wraps.length > 0) {
+                wraps.forEach(wrap => {
+                    cards.push(wrap.outerHTML);
+                });
+            } else {
+                // Fallback: get cards directly
+                const cardElements = Array.from(document.querySelectorAll('.game-card'))
+                    .filter(card => card.querySelector('.game-card__name-wrapper') !== null);
+                cardElements.forEach(card => {
+                    cards.push(card.outerHTML);
+                });
+            }
+            
+            return cards;
+        });
+        
+        allPagesHtml.push(...pageCardsHtml);
+        
+        log.info(`[Scraper] Page ${pageNum}: collected ${pageCardsHtml.length} game cards`);
+        
+        if (pageCardsHtml.length === 0 && pageNum > 1) {
+            log.warn(`[Scraper] Page ${pageNum} has no games, stopping pagination`);
+            break;
+        }
+    }
+    
+    log.info(`[Scraper] Pagination complete, collected ${allPagesHtml.length} cards from all pages`);
+    
+    // Combine all cards into first page HTML structure
+    if (allPagesHtml.length > 0) {
+        // Get first page HTML to use as base structure
+        const firstPageUrl = new URL(baseUrl);
+        
+        // Preserve all query params except page and statuses
+        currentUrl.searchParams.forEach((value, key) => {
+            if (key !== 'page' && key !== 'statuses[]' && !key.startsWith('statuses')) {
+                firstPageUrl.searchParams.set(key, value);
+            }
+        });
+        
+        // Add all statuses[] parameters properly
+        statusesValues.forEach(statusValue => {
+            firstPageUrl.searchParams.append('statuses[]', statusValue);
+        });
+        
+        firstPageUrl.searchParams.set('page', '1');
+        
+        // Navigate back to first page to get full HTML structure
+        if (paginationInfo.maxPage > 1) {
+            await page.goto(firstPageUrl.toString(), { 
+                waitUntil: 'networkidle2', 
+                timeout: 30_000 
+            });
+            await delay(1000);
+        }
+        
+        const firstPageHtml = await page.content();
+        const $ = cheerio.load(firstPageHtml);
+        
+        // Inject combined cards into first page HTML
+        const existingWraps = $('.game-card__wrap').first();
+        const existingCards = $('.game-card').first();
+        
+        if (existingWraps.length) {
+            const container = existingWraps.parent();
+            container.find('.game-card__wrap, .game-card').remove();
+            container.append(allPagesHtml.join(''));
+            log.info(`[Scraper] Injected ${allPagesHtml.length} cards into wraps container`);
+        } else if (existingCards.length) {
+            const container = existingCards.parent();
+            container.find('.game-card').remove();
+            container.append(allPagesHtml.join(''));
+            log.info(`[Scraper] Injected ${allPagesHtml.length} cards into cards container`);
+        } else {
+            // Fallback: append to body
+            $('body').append(`<div class="combined-pages">${allPagesHtml.join('')}</div>`);
+            log.info(`[Scraper] Injected ${allPagesHtml.length} cards into body (fallback)`);
+        }
+        
+        return $.html();
+    }
+    
+    // Fallback: return first page HTML if no cards collected
+    return await page.content();
+}
+
 async function ensureScheduleLoaded(page: Page): Promise<void> {
     // Support both legacy schedule layout and new card-based layout.
     await page.waitForSelector('.schedule-column, .game-card__wrap, .game-card', { timeout: 30_000 });
 
+    // Check if we're on new layout (game-card with paginator) or legacy layout
+    const isNewLayout = await page.$('.game-card') !== null && await page.$('.game-pagination') !== null;
+    
+    if (isNewLayout) {
+        // New layout: pagination is handled separately in fetchViaBrowser
+        log.info('[Scraper] Detected new game-card layout with paginator');
+        return;
+    }
+
+    // Legacy layout: use scroll + load more
+    log.info('[Scraper] Detected legacy schedule-column layout, using scroll + load more');
     let previousCount = await page.$$eval('.schedule-column, .game-card__wrap, .game-card', elements => elements.length);
     let stagnantIterations = 0;
 
@@ -240,7 +435,17 @@ async function fetchViaBrowser(url: string): Promise<string> {
 
             await ensureScheduleLoaded(page);
 
-            const html = await page.content();
+            // Check if we're on new layout with paginator
+            const isNewLayout = await page.$('.game-card') !== null && await page.$('.game-pagination') !== null;
+            
+            let html: string;
+            if (isNewLayout) {
+                log.info('[Scraper] Collecting HTML from all paginated pages...');
+                html = await handlePaginationLayout(page);
+            } else {
+                html = await page.content();
+            }
+            
             if (containsChallenge(html)) {
                 throw new Error('Received anti-bot challenge page even after browser navigation');
             }
