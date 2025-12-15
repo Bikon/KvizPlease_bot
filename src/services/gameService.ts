@@ -1,3 +1,5 @@
+import * as cheerio from 'cheerio';
+
 import { config } from '../config.js';
 import {
     findUpcomingGames,
@@ -23,11 +25,61 @@ function extractGroupKey(title: string) {
     return { groupKey: `${typeName}#${num}`, typeName, number: num };
 }
 
-async function syncGamesInternal(chatId: string, sourceUrl: string): Promise<{ added: number; skipped: number; excluded: number }> {
-    const html = await grabPageHtmlWithFilters(sourceUrl);
-    log.info(`[Chat ${chatId}] HTML grabbed & full list loaded`);
+const MAX_PAGINATION_PAGES = 20;
 
-    const raw = parseQuizPlease(html, sourceUrl);
+async function syncGamesInternal(chatId: string, sourceUrl: string): Promise<{ added: number; skipped: number; excluded: number }> {
+    const allRaw = [];
+
+    // 1) Load first page to detect max page from paginator
+    const firstUrl = new URL(sourceUrl);
+    firstUrl.searchParams.set('page', '1');
+    const firstPageUrl = firstUrl.toString();
+
+    const firstHtml = await grabPageHtmlWithFilters(firstPageUrl);
+    log.info(`[Chat ${chatId}] HTML grabbed for page 1`);
+
+    // Parse max page from paginator
+    let maxPageFromPaginator = 1;
+    try {
+        const $ = cheerio.load(firstHtml);
+        $('.game-pagination__list-item p').each((_, el) => {
+            const txt = $(el).text().trim();
+            const n = Number.parseInt(txt, 10);
+            if (!Number.isNaN(n) && n > maxPageFromPaginator) {
+                maxPageFromPaginator = n;
+            }
+        });
+        log.info(`[Chat ${chatId}] Detected max page from paginator: ${maxPageFromPaginator}`);
+    } catch (err) {
+        log.warn(`[Chat ${chatId}] Failed to detect max page from paginator`, err);
+    }
+
+    const maxPage = Math.min(maxPageFromPaginator, MAX_PAGINATION_PAGES);
+
+    // Parse first page
+    const firstRaw = parseQuizPlease(firstHtml, firstPageUrl);
+    log.info(`[Chat ${chatId}] Parsed ${firstRaw.length} games from page 1`);
+    allRaw.push(...firstRaw);
+
+    // 2) Iterate remaining pages up to detected maxPage
+    for (let page = 2; page <= maxPage; page++) {
+        const url = new URL(sourceUrl);
+        url.searchParams.set('page', String(page));
+
+        const pageUrl = url.toString();
+        const html = await grabPageHtmlWithFilters(pageUrl);
+        log.info(`[Chat ${chatId}] HTML grabbed for page ${page}`);
+
+        const rawPage = parseQuizPlease(html, pageUrl);
+        log.info(`[Chat ${chatId}] Parsed ${rawPage.length} games from page ${page}`);
+
+        // Safety: if some later page is unexpectedly empty, stop early
+        if (rawPage.length === 0) break;
+
+        allRaw.push(...rawPage);
+    }
+
+    const raw = allRaw;
     
     // Получаем исключенные типы пакетов(игр) для этого чата
     const excludedTypes = new Set((await listExcludedTypes(chatId)).map(t => t.toLowerCase()));

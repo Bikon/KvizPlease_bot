@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 
+import * as cheerio from 'cheerio';
 import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import type { Browser, Page } from 'puppeteer';
@@ -80,7 +81,23 @@ async function fetchViaHttp(url: string): Promise<string | null> {
                 log.warn('[Scraper] HTTP response looks like an anti-bot challenge, switching to browser mode');
                 return null;
             }
-            log.info('[Scraper] HTTP fetch succeeded without browser');
+
+            // Quick structural check: if the HTML doesn't contain either legacy schedule columns
+            // or new game-card layout, fall back to browser rendering (likely JS-driven SPA shell).
+            try {
+                const $ = cheerio.load(html);
+                const hasScheduleColumns = $('.schedule-column').length > 0;
+                const hasGameCards = $('.game-card__wrap').length > 0 || $('.game-card').length > 0;
+
+                if (!hasScheduleColumns && !hasGameCards) {
+                    log.warn('[Scraper] HTTP HTML has no .schedule-column or .game-card* elements, switching to browser mode');
+                    return null;
+                }
+            } catch (e) {
+                log.warn('[Scraper] Failed to inspect HTTP HTML with cheerio, using raw HTML', e);
+            }
+
+            log.info('[Scraper] HTTP fetch succeeded with usable schedule layout');
             return html;
         } catch (err) {
             log.warn(`[Scraper] HTTP attempt ${attempt} failed`, err);
@@ -150,9 +167,10 @@ async function clickLoadMore(page: Page): Promise<boolean> {
 }
 
 async function ensureScheduleLoaded(page: Page): Promise<void> {
-    await page.waitForSelector('.schedule-column', { timeout: 30_000 });
+    // Support both legacy schedule layout and new card-based layout.
+    await page.waitForSelector('.schedule-column, .game-card__wrap, .game-card', { timeout: 30_000 });
 
-    let previousCount = await page.$$eval('.schedule-column', elements => elements.length);
+    let previousCount = await page.$$eval('.schedule-column, .game-card__wrap, .game-card', elements => elements.length);
     let stagnantIterations = 0;
 
     for (let iteration = 0; iteration < MAX_SCROLL_ITERATIONS; iteration++) {
@@ -164,7 +182,7 @@ async function ensureScheduleLoaded(page: Page): Promise<void> {
         await page.waitForNetworkIdle({ idleTime: 800, timeout: 25_000 }).catch(() => {});
         await delay(SCROLL_DELAY_MS);
 
-        const currentCount = await page.$$eval('.schedule-column', elements => elements.length);
+        const currentCount = await page.$$eval('.schedule-column, .game-card__wrap, .game-card', elements => elements.length);
         if (currentCount <= previousCount) {
             stagnantIterations += 1;
             if (stagnantIterations >= 4) {

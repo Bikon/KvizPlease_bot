@@ -3,6 +3,7 @@ import * as cheerio from 'cheerio';
 import { log } from '../utils/logger.js';
 import { extractBracketContent, extractGameNumber, isTimeFormat } from '../utils/patterns.js';
 import type { RawGame } from '../types.js';
+import { parseQuizPleaseV2 } from './parseV2.js';
 
 export function parseQuizPlease(html: string, baseUrl: string): RawGame[] {
     const $ = cheerio.load(html);
@@ -10,6 +11,12 @@ export function parseQuizPlease(html: string, baseUrl: string): RawGame[] {
     
     const scheduleColumns = $('.schedule-column');
     log.info(`[Parser] Found ${scheduleColumns.length} .schedule-column elements`);
+
+    // New layout: fall back to V2 parser that works with .game-card__wrap cards
+    if (scheduleColumns.length === 0) {
+        log.info('[Parser] No .schedule-column elements found, delegating to ParserV2');
+        return parseQuizPleaseV2(html, baseUrl);
+    }
 
     const toAbs = (href: string | undefined) => {
         if (!href) return baseUrl;
