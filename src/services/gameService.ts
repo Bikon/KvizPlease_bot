@@ -1,6 +1,5 @@
 import * as cheerio from 'cheerio';
 
-import { config } from '../config.js';
 import {
     findUpcomingGames,
     findUpcomingGroups,
